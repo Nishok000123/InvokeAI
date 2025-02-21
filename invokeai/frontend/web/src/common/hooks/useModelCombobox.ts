@@ -1,14 +1,14 @@
 import type { ComboboxOnChange, ComboboxOption } from '@invoke-ai/ui-library';
-import type { EntityState } from '@reduxjs/toolkit';
-import { map } from 'lodash-es';
+import { useAppSelector } from 'app/store/storeHooks';
+import type { ModelIdentifierField } from 'features/nodes/types/common';
+import { selectSystemShouldEnableModelDescriptions } from 'features/system/store/systemSlice';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { AnyModelConfigEntity } from 'services/api/endpoints/models';
-import { getModelId } from 'services/api/endpoints/models';
+import type { AnyModelConfig } from 'services/api/types';
 
-type UseModelComboboxArg<T extends AnyModelConfigEntity> = {
-  modelEntities: EntityState<T, string> | undefined;
-  selectedModel?: Pick<T, 'base_model' | 'model_name' | 'model_type'> | null;
+type UseModelComboboxArg<T extends AnyModelConfig> = {
+  modelConfigs: T[];
+  selectedModel?: ModelIdentifierField | null;
   onChange: (value: T | null) => void;
   getIsDisabled?: (model: T) => boolean;
   optionsFilter?: (model: T) => boolean;
@@ -23,26 +23,22 @@ type UseModelComboboxReturn = {
   noOptionsMessage: () => string;
 };
 
-export const useModelCombobox = <T extends AnyModelConfigEntity>(
-  arg: UseModelComboboxArg<T>
-): UseModelComboboxReturn => {
+export const useModelCombobox = <T extends AnyModelConfig>(arg: UseModelComboboxArg<T>): UseModelComboboxReturn => {
   const { t } = useTranslation();
-  const { modelEntities, selectedModel, getIsDisabled, onChange, isLoading, optionsFilter = () => true } = arg;
+  const { modelConfigs, selectedModel, getIsDisabled, onChange, isLoading, optionsFilter = () => true } = arg;
+  const shouldShowModelDescriptions = useAppSelector(selectSystemShouldEnableModelDescriptions);
+
   const options = useMemo<ComboboxOption[]>(() => {
-    if (!modelEntities) {
-      return [];
-    }
-    return map(modelEntities.entities)
-      .filter(optionsFilter)
-      .map((model) => ({
-        label: model.model_name,
-        value: model.id,
-        isDisabled: getIsDisabled ? getIsDisabled(model) : false,
-      }));
-  }, [optionsFilter, getIsDisabled, modelEntities]);
+    return modelConfigs.filter(optionsFilter).map((model) => ({
+      label: model.name,
+      value: model.key,
+      description: (shouldShowModelDescriptions && model.description) || undefined,
+      isDisabled: getIsDisabled ? getIsDisabled(model) : false,
+    }));
+  }, [optionsFilter, getIsDisabled, modelConfigs, shouldShowModelDescriptions]);
 
   const value = useMemo(
-    () => options.find((m) => (selectedModel ? m.value === getModelId(selectedModel) : false)),
+    () => options.find((m) => (selectedModel ? m.value === selectedModel.key : false)),
     [options, selectedModel]
   );
 
@@ -52,14 +48,14 @@ export const useModelCombobox = <T extends AnyModelConfigEntity>(
         onChange(null);
         return;
       }
-      const model = modelEntities?.entities[v.value];
+      const model = modelConfigs.find((m) => m.key === v.value);
       if (!model) {
         onChange(null);
         return;
       }
       onChange(model);
     },
-    [modelEntities?.entities, onChange]
+    [modelConfigs, onChange]
   );
 
   const placeholder = useMemo(() => {

@@ -1,6 +1,7 @@
-import type { CONTROLNET_PROCESSORS } from 'features/controlAdapters/store/constants';
-import type { InvokeTabName } from 'features/ui/store/tabMap';
-import type { O } from 'ts-toolbelt';
+import type { FilterType } from 'features/controlLayers/store/filters';
+import type { ParameterPrecision, ParameterScheduler } from 'features/parameters/types/parameterSchemas';
+import type { TabName } from 'features/ui/store/uiTypes';
+import type { PartialDeep } from 'type-fest';
 
 /**
  * A disable-able application feature
@@ -21,9 +22,12 @@ export type AppFeature =
   | 'multiselect'
   | 'pauseQueue'
   | 'resumeQueue'
-  | 'prependQueue'
   | 'invocationCache'
-  | 'bulkDownload';
+  | 'modelCache'
+  | 'bulkDownload'
+  | 'starterModels'
+  | 'hfToken'
+  | 'retryQueueItem';
 /**
  * A disable-able Stable Diffusion feature
  */
@@ -61,19 +65,26 @@ export type AppConfig = {
    */
   shouldUpdateImagesOnConnect: boolean;
   shouldFetchMetadataFromApi: boolean;
-  disabledTabs: InvokeTabName[];
+  /**
+   * Sets a size limit for outputs on the upscaling tab. This is a maximum dimension, so the actual max number of pixels
+   * will be the square of this value.
+   */
+  maxUpscaleDimension?: number;
+  allowPrivateBoards: boolean;
+  allowPrivateStylePresets: boolean;
+  disabledTabs: TabName[];
   disabledFeatures: AppFeature[];
   disabledSDFeatures: SDFeature[];
-  canRestoreDeletedImagesFromBin: boolean;
   nodesAllowlist: string[] | undefined;
   nodesDenylist: string[] | undefined;
-  maxUpscalePixels?: number;
   metadataFetchDebounce?: number;
   workflowFetchDebounce?: number;
+  isLocal?: boolean;
+  maxImageUploadCount?: number;
   sd: {
     defaultModel?: string;
     disabledControlNetModels: string[];
-    disabledControlNetProcessors: (keyof typeof CONTROLNET_PROCESSORS)[];
+    disabledControlNetProcessors: FilterType[];
     // Core parameters
     iterations: NumericalParameterConfig;
     width: NumericalParameterConfig; // initial value comes from model
@@ -82,13 +93,15 @@ export type AppConfig = {
     guidance: NumericalParameterConfig;
     cfgRescaleMultiplier: NumericalParameterConfig;
     img2imgStrength: NumericalParameterConfig;
+    scheduler?: ParameterScheduler;
+    vaePrecision?: ParameterPrecision;
     // Canvas
     boundingBoxHeight: NumericalParameterConfig; // initial value comes from model
     boundingBoxWidth: NumericalParameterConfig; // initial value comes from model
     scaledBoundingBoxHeight: NumericalParameterConfig; // initial value comes from model
     scaledBoundingBoxWidth: NumericalParameterConfig; // initial value comes from model
     canvasCoherenceStrength: NumericalParameterConfig;
-    canvasCoherenceSteps: NumericalParameterConfig;
+    canvasCoherenceEdgeSize: NumericalParameterConfig;
     infillTileSize: NumericalParameterConfig;
     infillPatchmatchDownscaleSize: NumericalParameterConfig;
     // Misc advanced
@@ -102,6 +115,9 @@ export type AppConfig = {
       weight: NumericalParameterConfig;
     };
   };
+  flux: {
+    guidance: NumericalParameterConfig;
+  };
 };
 
-export type PartialAppConfig = O.Partial<AppConfig, 'deep'>;
+export type PartialAppConfig = PartialDeep<AppConfig>;

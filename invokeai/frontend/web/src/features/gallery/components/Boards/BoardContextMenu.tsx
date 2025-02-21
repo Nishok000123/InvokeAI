@@ -2,105 +2,119 @@ import type { ContextMenuProps } from '@invoke-ai/ui-library';
 import { ContextMenu, MenuGroup, MenuItem, MenuList } from '@invoke-ai/ui-library';
 import { createSelector } from '@reduxjs/toolkit';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
-import { autoAddBoardIdChanged, selectGallerySlice } from 'features/gallery/store/gallerySlice';
-import type { BoardId } from 'features/gallery/store/types';
+import { $boardToDelete } from 'features/gallery/components/Boards/DeleteBoardModal';
+import { selectAutoAddBoardId, selectAutoAssignBoardOnClick } from 'features/gallery/store/gallerySelectors';
+import { autoAddBoardIdChanged } from 'features/gallery/store/gallerySlice';
 import { useFeatureStatus } from 'features/system/hooks/useFeatureStatus';
-import { addToast } from 'features/system/store/systemSlice';
+import { toast } from 'features/toast/toast';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { PiDownloadBold, PiPlusBold } from 'react-icons/pi';
+import { PiArchiveBold, PiArchiveFill, PiDownloadBold, PiPlusBold, PiTrashSimpleBold } from 'react-icons/pi';
+import { useUpdateBoardMutation } from 'services/api/endpoints/boards';
 import { useBulkDownloadImagesMutation } from 'services/api/endpoints/images';
 import { useBoardName } from 'services/api/hooks/useBoardName';
 import type { BoardDTO } from 'services/api/types';
 
-import GalleryBoardContextMenuItems from './GalleryBoardContextMenuItems';
-
 type Props = {
-  board?: BoardDTO;
-  board_id: BoardId;
+  board: BoardDTO;
   children: ContextMenuProps<HTMLDivElement>['children'];
-  setBoardToDelete?: (board?: BoardDTO) => void;
 };
 
-const BoardContextMenu = ({ board, board_id, setBoardToDelete, children }: Props) => {
+const BoardContextMenu = ({ board, children }: Props) => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
-  const autoAssignBoardOnClick = useAppSelector((s) => s.gallery.autoAssignBoardOnClick);
+  const autoAssignBoardOnClick = useAppSelector(selectAutoAssignBoardOnClick);
   const selectIsSelectedForAutoAdd = useMemo(
-    () => createSelector(selectGallerySlice, (gallery) => board && board.board_id === gallery.autoAddBoardId),
-    [board]
+    () => createSelector(selectAutoAddBoardId, (autoAddBoardId) => board.board_id === autoAddBoardId),
+    [board.board_id]
   );
 
+  const [updateBoard] = useUpdateBoardMutation();
+
   const isSelectedForAutoAdd = useAppSelector(selectIsSelectedForAutoAdd);
-  const boardName = useBoardName(board_id);
-  const isBulkDownloadEnabled = useFeatureStatus('bulkDownload').isFeatureEnabled;
+  const boardName = useBoardName(board.board_id);
+  const isBulkDownloadEnabled = useFeatureStatus('bulkDownload');
 
   const [bulkDownload] = useBulkDownloadImagesMutation();
 
   const handleSetAutoAdd = useCallback(() => {
-    dispatch(autoAddBoardIdChanged(board_id));
-  }, [board_id, dispatch]);
+    dispatch(autoAddBoardIdChanged(board.board_id));
+  }, [board.board_id, dispatch]);
 
-  const handleBulkDownload = useCallback(async () => {
+  const handleBulkDownload = useCallback(() => {
+    bulkDownload({ image_names: [], board_id: board.board_id });
+  }, [board.board_id, bulkDownload]);
+
+  const handleArchive = useCallback(async () => {
     try {
-      const response = await bulkDownload({
-        image_names: [],
-        board_id: board_id,
+      await updateBoard({
+        board_id: board.board_id,
+        changes: { archived: true },
       }).unwrap();
-
-      dispatch(
-        addToast({
-          title: t('gallery.preparingDownload'),
-          status: 'success',
-          ...(response.response
-            ? {
-                description: response.response,
-                duration: null,
-                isClosable: true,
-              }
-            : {}),
-        })
-      );
-    } catch {
-      dispatch(
-        addToast({
-          title: t('gallery.preparingDownloadFailed'),
-          status: 'error',
-        })
-      );
+    } catch (error) {
+      toast({
+        status: 'error',
+        title: 'Unable to archive board',
+      });
     }
-  }, [t, board_id, bulkDownload, dispatch]);
+  }, [board.board_id, updateBoard]);
+
+  const handleUnarchive = useCallback(() => {
+    updateBoard({
+      board_id: board.board_id,
+      changes: { archived: false },
+    });
+  }, [board.board_id, updateBoard]);
+
+  const setAsBoardToDelete = useCallback(() => {
+    $boardToDelete.set(board);
+  }, [board]);
 
   const renderMenuFunc = useCallback(
     () => (
       <MenuList visibility="visible">
         <MenuGroup title={boardName}>
-          <MenuItem
-            icon={<PiPlusBold />}
-            isDisabled={isSelectedForAutoAdd || autoAssignBoardOnClick}
-            onClick={handleSetAutoAdd}
-          >
-            {t('boards.menuItemAutoAdd')}
-          </MenuItem>
+          {!autoAssignBoardOnClick && (
+            <MenuItem icon={<PiPlusBold />} isDisabled={isSelectedForAutoAdd} onClick={handleSetAutoAdd}>
+              {isSelectedForAutoAdd ? t('boards.selectedForAutoAdd') : t('boards.menuItemAutoAdd')}
+            </MenuItem>
+          )}
           {isBulkDownloadEnabled && (
             <MenuItem icon={<PiDownloadBold />} onClickCapture={handleBulkDownload}>
               {t('boards.downloadBoard')}
             </MenuItem>
           )}
-          {board && <GalleryBoardContextMenuItems board={board} setBoardToDelete={setBoardToDelete} />}
+
+          {board.archived && (
+            <MenuItem icon={<PiArchiveBold />} onClick={handleUnarchive}>
+              {t('boards.unarchiveBoard')}
+            </MenuItem>
+          )}
+
+          {!board.archived && (
+            <MenuItem icon={<PiArchiveFill />} onClick={handleArchive}>
+              {t('boards.archiveBoard')}
+            </MenuItem>
+          )}
+
+          <MenuItem color="error.300" icon={<PiTrashSimpleBold />} onClick={setAsBoardToDelete} isDestructive>
+            {t('boards.deleteBoard')}
+          </MenuItem>
         </MenuGroup>
       </MenuList>
     ),
     [
-      autoAssignBoardOnClick,
-      board,
       boardName,
-      handleBulkDownload,
-      handleSetAutoAdd,
-      isBulkDownloadEnabled,
+      autoAssignBoardOnClick,
       isSelectedForAutoAdd,
-      setBoardToDelete,
+      handleSetAutoAdd,
       t,
+      isBulkDownloadEnabled,
+      handleBulkDownload,
+      board.archived,
+      handleUnarchive,
+      handleArchive,
+      setAsBoardToDelete,
     ]
   );
 

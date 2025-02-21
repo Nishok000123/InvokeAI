@@ -1,25 +1,21 @@
 import { logger } from 'app/logging/logger';
-import {
-  controlAdapterIsEnabledChanged,
-  selectControlAdapterAll,
-} from 'features/controlAdapters/store/controlAdaptersSlice';
-import { loraRemoved } from 'features/lora/store/loraSlice';
+import type { AppStartListening } from 'app/store/middleware/listenerMiddleware';
+import { bboxSyncedToOptimalDimension } from 'features/controlLayers/store/canvasSlice';
+import { selectIsStaging } from 'features/controlLayers/store/canvasStagingAreaSlice';
+import { loraDeleted } from 'features/controlLayers/store/lorasSlice';
+import { modelChanged, vaeSelected } from 'features/controlLayers/store/paramsSlice';
+import { selectBboxModelBase } from 'features/controlLayers/store/selectors';
 import { modelSelected } from 'features/parameters/store/actions';
-import { modelChanged, vaeSelected } from 'features/parameters/store/generationSlice';
 import { zParameterModel } from 'features/parameters/types/parameterSchemas';
-import { addToast } from 'features/system/store/systemSlice';
-import { makeToast } from 'features/system/util/makeToast';
+import { toast } from 'features/toast/toast';
 import { t } from 'i18next';
-import { forEach } from 'lodash-es';
 
-import { startAppListening } from '..';
+const log = logger('models');
 
-export const addModelSelectedListener = () => {
+export const addModelSelectedListener = (startAppListening: AppStartListening) => {
   startAppListening({
     actionCreator: modelSelected,
     effect: (action, { getState, dispatch }) => {
-      const log = logger('models');
-
       const state = getState();
       const result = zParameterModel.safeParse(action.payload);
 
@@ -30,51 +26,55 @@ export const addModelSelectedListener = () => {
 
       const newModel = result.data;
 
-      const newBaseModel = newModel.base_model;
-      const didBaseModelChange = state.generation.model?.base_model !== newBaseModel;
+      const newBaseModel = newModel.base;
+      const didBaseModelChange = state.params.model?.base !== newBaseModel;
 
       if (didBaseModelChange) {
         // we may need to reset some incompatible submodels
         let modelsCleared = 0;
 
         // handle incompatible loras
-        forEach(state.lora.loras, (lora, id) => {
-          if (lora.base_model !== newBaseModel) {
-            dispatch(loraRemoved(id));
+        state.loras.loras.forEach((lora) => {
+          if (lora.model.base !== newBaseModel) {
+            dispatch(loraDeleted({ id: lora.id }));
             modelsCleared += 1;
           }
         });
 
         // handle incompatible vae
-        const { vae } = state.generation;
-        if (vae && vae.base_model !== newBaseModel) {
+        const { vae } = state.params;
+        if (vae && vae.base !== newBaseModel) {
           dispatch(vaeSelected(null));
           modelsCleared += 1;
         }
 
         // handle incompatible controlnets
-        selectControlAdapterAll(state.controlAdapters).forEach((ca) => {
-          if (ca.model?.base_model !== newBaseModel) {
-            dispatch(controlAdapterIsEnabledChanged({ id: ca.id, isEnabled: false }));
-            modelsCleared += 1;
-          }
-        });
+        // state.canvas.present.controlAdapters.entities.forEach((ca) => {
+        //   if (ca.model?.base !== newBaseModel) {
+        //     modelsCleared += 1;
+        //     if (ca.isEnabled) {
+        //       dispatch(entityIsEnabledToggled({ entityIdentifier: { id: ca.id, type: 'control_adapter' } }));
+        //     }
+        //   }
+        // });
 
         if (modelsCleared > 0) {
-          dispatch(
-            addToast(
-              makeToast({
-                title: t('toast.baseModelChangedCleared', {
-                  count: modelsCleared,
-                }),
-                status: 'warning',
-              })
-            )
-          );
+          toast({
+            id: 'BASE_MODEL_CHANGED',
+            title: t('toast.baseModelChanged'),
+            description: t('toast.baseModelChangedCleared', {
+              count: modelsCleared,
+            }),
+            status: 'warning',
+          });
         }
       }
 
-      dispatch(modelChanged(newModel, state.generation.model));
+      dispatch(modelChanged({ model: newModel, previousModel: state.params.model }));
+      const modelBase = selectBboxModelBase(state);
+      if (!selectIsStaging(state) && modelBase !== state.params.model?.base) {
+        dispatch(bboxSyncedToOptimalDimension());
+      }
     },
   });
 };

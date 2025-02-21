@@ -11,23 +11,34 @@ const FIELD_VALUE_FALLBACK_MAP: Record<StatefulFieldType['name'], FieldValue> = 
   IntegerField: 0,
   IPAdapterModelField: undefined,
   LoRAModelField: undefined,
+  ModelIdentifierField: undefined,
   MainModelField: undefined,
-  SchedulerField: 'euler',
+  SchedulerField: 'dpmpp_3m_k',
   SDXLMainModelField: undefined,
+  FluxMainModelField: undefined,
+  SD3MainModelField: undefined,
   SDXLRefinerModelField: undefined,
   StringField: '',
   T2IAdapterModelField: undefined,
+  SpandrelImageToImageModelField: undefined,
   VAEModelField: undefined,
   ControlNetModelField: undefined,
+  T5EncoderModelField: undefined,
+  FluxVAEModelField: undefined,
+  CLIPEmbedModelField: undefined,
+  CLIPLEmbedModelField: undefined,
+  CLIPGEmbedModelField: undefined,
+  ControlLoRAModelField: undefined,
+  FloatGeneratorField: undefined,
+  IntegerGeneratorField: undefined,
+  StringGeneratorField: undefined,
 };
 
 export const buildFieldInputInstance = (id: string, template: FieldInputTemplate): FieldInputInstance => {
   const fieldInstance: FieldInputInstance = {
-    id,
     name: template.name,
-    type: template.type,
     label: '',
-    fieldKind: 'input' as const,
+    description: '',
     value: template.default ?? get(FIELD_VALUE_FALLBACK_MAP, template.type.name),
   };
 

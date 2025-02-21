@@ -1,19 +1,22 @@
 import type { ComboboxOnChange, ComboboxOption } from '@invoke-ai/ui-library';
-import type { EntityState } from '@reduxjs/toolkit';
+import { createSelector } from '@reduxjs/toolkit';
 import { useAppSelector } from 'app/store/storeHooks';
 import type { GroupBase } from 'chakra-react-select';
-import { groupBy, map, reduce } from 'lodash-es';
+import { selectParamsSlice } from 'features/controlLayers/store/paramsSlice';
+import type { ModelIdentifierField } from 'features/nodes/types/common';
+import { selectSystemShouldEnableModelDescriptions } from 'features/system/store/systemSlice';
+import { groupBy, reduce } from 'lodash-es';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { AnyModelConfigEntity } from 'services/api/endpoints/models';
-import { getModelId } from 'services/api/endpoints/models';
+import type { AnyModelConfig } from 'services/api/types';
 
-type UseGroupedModelComboboxArg<T extends AnyModelConfigEntity> = {
-  modelEntities: EntityState<T, string> | undefined;
-  selectedModel?: Pick<T, 'base_model' | 'model_name' | 'model_type'> | null;
+type UseGroupedModelComboboxArg<T extends AnyModelConfig> = {
+  modelConfigs: T[];
+  selectedModel?: ModelIdentifierField | null;
   onChange: (value: T | null) => void;
   getIsDisabled?: (model: T) => boolean;
   isLoading?: boolean;
+  groupByType?: boolean;
 };
 
 type UseGroupedModelComboboxReturn = {
@@ -24,26 +27,33 @@ type UseGroupedModelComboboxReturn = {
   noOptionsMessage: () => string;
 };
 
-export const useGroupedModelCombobox = <T extends AnyModelConfigEntity>(
+const groupByBaseFunc = <T extends AnyModelConfig>(model: T) => model.base.toUpperCase();
+const groupByBaseAndTypeFunc = <T extends AnyModelConfig>(model: T) =>
+  `${model.base.toUpperCase()} / ${model.type.replaceAll('_', ' ').toUpperCase()}`;
+
+const selectBaseWithSDXLFallback = createSelector(selectParamsSlice, (params) => params.model?.base ?? 'sdxl');
+
+export const useGroupedModelCombobox = <T extends AnyModelConfig>(
   arg: UseGroupedModelComboboxArg<T>
 ): UseGroupedModelComboboxReturn => {
   const { t } = useTranslation();
-  const base_model = useAppSelector((s) => s.generation.model?.base_model ?? 'sdxl');
-  const { modelEntities, selectedModel, getIsDisabled, onChange, isLoading } = arg;
+  const base = useAppSelector(selectBaseWithSDXLFallback);
+  const shouldShowModelDescriptions = useAppSelector(selectSystemShouldEnableModelDescriptions);
+  const { modelConfigs, selectedModel, getIsDisabled, onChange, isLoading, groupByType = false } = arg;
   const options = useMemo<GroupBase<ComboboxOption>[]>(() => {
-    if (!modelEntities) {
+    if (!modelConfigs) {
       return [];
     }
-    const modelEntitiesArray = map(modelEntities.entities);
-    const groupedModels = groupBy(modelEntitiesArray, 'base_model');
+    const groupedModels = groupBy(modelConfigs, groupByType ? groupByBaseAndTypeFunc : groupByBaseFunc);
     const _options = reduce(
       groupedModels,
       (acc, val, label) => {
         acc.push({
           label,
           options: val.map((model) => ({
-            label: model.model_name,
-            value: model.id,
+            label: model.name,
+            value: model.key,
+            description: (shouldShowModelDescriptions && model.description) || undefined,
             isDisabled: getIsDisabled ? getIsDisabled(model) : false,
           })),
         });
@@ -51,14 +61,13 @@ export const useGroupedModelCombobox = <T extends AnyModelConfigEntity>(
       },
       [] as GroupBase<ComboboxOption>[]
     );
-    _options.sort((a) => (a.label === base_model ? -1 : 1));
+    _options.sort((a) => (a.label?.split('/')[0]?.toLowerCase().includes(base) ? -1 : 1));
     return _options;
-  }, [getIsDisabled, modelEntities, base_model]);
+  }, [modelConfigs, groupByType, getIsDisabled, base, shouldShowModelDescriptions]);
 
   const value = useMemo(
     () =>
-      options.flatMap((o) => o.options).find((m) => (selectedModel ? m.value === getModelId(selectedModel) : false)) ??
-      null,
+      options.flatMap((o) => o.options).find((m) => (selectedModel ? m.value === selectedModel.key : false)) ?? null,
     [options, selectedModel]
   );
 
@@ -68,14 +77,14 @@ export const useGroupedModelCombobox = <T extends AnyModelConfigEntity>(
         onChange(null);
         return;
       }
-      const model = modelEntities?.entities[v.value];
+      const model = modelConfigs.find((m) => m.key === v.value);
       if (!model) {
         onChange(null);
         return;
       }
       onChange(model);
     },
-    [modelEntities?.entities, onChange]
+    [modelConfigs, onChange]
   );
 
   const placeholder = useMemo(() => {

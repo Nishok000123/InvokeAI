@@ -1,42 +1,44 @@
 import type { ChakraProps } from '@invoke-ai/ui-library';
 import { Combobox, FormControl, FormLabel } from '@invoke-ai/ui-library';
-import { createMemoizedSelector } from 'app/store/createMemoizedSelector';
+import { createSelector } from '@reduxjs/toolkit';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
+import { InformationalPopover } from 'common/components/InformationalPopover/InformationalPopover';
 import { useGroupedModelCombobox } from 'common/hooks/useGroupedModelCombobox';
-import { loraAdded, selectLoraSlice } from 'features/lora/store/loraSlice';
+import { loraAdded, selectLoRAsSlice } from 'features/controlLayers/store/lorasSlice';
+import { selectBase } from 'features/controlLayers/store/paramsSlice';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { LoRAModelConfigEntity } from 'services/api/endpoints/models';
-import { useGetLoRAModelsQuery } from 'services/api/endpoints/models';
+import { useLoRAModels } from 'services/api/hooks/modelsByType';
+import type { LoRAModelConfig } from 'services/api/types';
 
-const selectAddedLoRAs = createMemoizedSelector(selectLoraSlice, (lora) => lora.loras);
+const selectLoRAs = createSelector(selectLoRAsSlice, (loras) => loras.loras);
 
 const LoRASelect = () => {
   const dispatch = useAppDispatch();
-  const { data, isLoading } = useGetLoRAModelsQuery();
+  const [modelConfigs, { isLoading }] = useLoRAModels();
   const { t } = useTranslation();
-  const addedLoRAs = useAppSelector(selectAddedLoRAs);
-  const currentBaseModel = useAppSelector((s) => s.generation.model?.base_model);
+  const addedLoRAs = useAppSelector(selectLoRAs);
+  const currentBaseModel = useAppSelector(selectBase);
 
-  const getIsDisabled = (lora: LoRAModelConfigEntity): boolean => {
-    const isCompatible = currentBaseModel === lora.base_model;
-    const isAdded = Boolean(addedLoRAs[lora.id]);
+  const getIsDisabled = (model: LoRAModelConfig): boolean => {
+    const isCompatible = currentBaseModel === model.base;
+    const isAdded = Boolean(addedLoRAs.find((lora) => lora.model.key === model.key));
     const hasMainModel = Boolean(currentBaseModel);
     return !hasMainModel || !isCompatible || isAdded;
   };
 
   const _onChange = useCallback(
-    (lora: LoRAModelConfigEntity | null) => {
-      if (!lora) {
+    (model: LoRAModelConfig | null) => {
+      if (!model) {
         return;
       }
-      dispatch(loraAdded(lora));
+      dispatch(loraAdded({ model }));
     },
     [dispatch]
   );
 
   const { options, onChange } = useGroupedModelCombobox({
-    modelEntities: data,
+    modelConfigs,
     getIsDisabled,
     onChange: _onChange,
   });
@@ -57,7 +59,9 @@ const LoRASelect = () => {
 
   return (
     <FormControl isDisabled={!options.length}>
-      <FormLabel>{t('models.lora')} </FormLabel>
+      <InformationalPopover feature="lora">
+        <FormLabel>{t('models.concepts')} </FormLabel>
+      </InformationalPopover>
       <Combobox
         placeholder={placeholder}
         value={null}

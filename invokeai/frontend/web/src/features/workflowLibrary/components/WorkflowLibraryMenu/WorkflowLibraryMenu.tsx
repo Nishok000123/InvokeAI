@@ -6,9 +6,11 @@ import {
   MenuList,
   useDisclosure,
   useGlobalMenuClose,
+  useShiftModifier,
 } from '@invoke-ai/ui-library';
 import DownloadWorkflowMenuItem from 'features/workflowLibrary/components/WorkflowLibraryMenu/DownloadWorkflowMenuItem';
-import NewWorkflowMenuItem from 'features/workflowLibrary/components/WorkflowLibraryMenu/NewWorkflowMenuItem';
+import LoadWorkflowFromGraphMenuItem from 'features/workflowLibrary/components/WorkflowLibraryMenu/LoadWorkflowFromGraphMenuItem';
+import { NewWorkflowMenuItem } from 'features/workflowLibrary/components/WorkflowLibraryMenu/NewWorkflowMenuItem';
 import SaveWorkflowAsMenuItem from 'features/workflowLibrary/components/WorkflowLibraryMenu/SaveWorkflowAsMenuItem';
 import SaveWorkflowMenuItem from 'features/workflowLibrary/components/WorkflowLibraryMenu/SaveWorkflowMenuItem';
 import SettingsMenuItem from 'features/workflowLibrary/components/WorkflowLibraryMenu/SettingsMenuItem';
@@ -20,6 +22,7 @@ import { PiDotsThreeOutlineFill } from 'react-icons/pi';
 const WorkflowLibraryMenu = () => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const shift = useShiftModifier();
   useGlobalMenuClose(onClose);
   return (
     <Menu isOpen={isOpen} onOpen={onOpen} onClose={onClose}>
@@ -38,6 +41,8 @@ const WorkflowLibraryMenu = () => {
         <DownloadWorkflowMenuItem />
         <MenuDivider />
         <SettingsMenuItem />
+        {shift && <MenuDivider />}
+        {shift && <LoadWorkflowFromGraphMenuItem />}
       </MenuList>
     </Menu>
   );

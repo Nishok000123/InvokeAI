@@ -1,9 +1,8 @@
 import { logger } from 'app/logging/logger';
-import { parseify } from 'common/util/serialize';
 import { PersistError, RehydrateError } from 'redux-remember';
 import { serializeError } from 'serialize-error';
 
-export type StorageErrorArgs = {
+type StorageErrorArgs = {
   key: string;
   /* eslint-disable-next-line @typescript-eslint/no-explicit-any */ // any is correct
   value?: any;
@@ -41,6 +40,6 @@ export const errorHandler = (err: PersistError | RehydrateError) => {
   } else if (err instanceof RehydrateError) {
     log.error({ error: serializeError(err) }, 'Problem rehydrating state');
   } else {
-    log.error({ error: parseify(err) }, 'Problem in persistence layer');
+    log.error({ error: serializeError(err) }, 'Problem in persistence layer');
   }
 };

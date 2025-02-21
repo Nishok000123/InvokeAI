@@ -2,10 +2,11 @@ import { Combobox, FormControl } from '@invoke-ai/ui-library';
 import { useAppDispatch } from 'app/store/storeHooks';
 import { useGroupedModelCombobox } from 'common/hooks/useGroupedModelCombobox';
 import { fieldLoRAModelValueChanged } from 'features/nodes/store/nodesSlice';
+import { NO_DRAG_CLASS, NO_WHEEL_CLASS } from 'features/nodes/types/constants';
 import type { LoRAModelFieldInputInstance, LoRAModelFieldInputTemplate } from 'features/nodes/types/field';
 import { memo, useCallback } from 'react';
-import type { LoRAModelConfigEntity } from 'services/api/endpoints/models';
-import { useGetLoRAModelsQuery } from 'services/api/endpoints/models';
+import { useLoRAModels } from 'services/api/hooks/modelsByType';
+import type { LoRAModelConfig } from 'services/api/types';
 
 import type { FieldComponentProps } from './types';
 
@@ -14,9 +15,9 @@ type Props = FieldComponentProps<LoRAModelFieldInputInstance, LoRAModelFieldInpu
 const LoRAModelFieldInputComponent = (props: Props) => {
   const { nodeId, field } = props;
   const dispatch = useAppDispatch();
-  const { data, isLoading } = useGetLoRAModelsQuery();
+  const [modelConfigs, { isLoading }] = useLoRAModels();
   const _onChange = useCallback(
-    (value: LoRAModelConfigEntity | null) => {
+    (value: LoRAModelConfig | null) => {
       if (!value) {
         return;
       }
@@ -32,14 +33,14 @@ const LoRAModelFieldInputComponent = (props: Props) => {
   );
 
   const { options, value, onChange, placeholder, noOptionsMessage } = useGroupedModelCombobox({
-    modelEntities: data,
+    modelConfigs,
     onChange: _onChange,
-    selectedModel: field.value ? { ...field.value, model_type: 'lora' } : undefined,
+    selectedModel: field.value,
     isLoading,
   });
 
   return (
-    <FormControl className="nowheel nodrag" isInvalid={!value} isDisabled={!options.length}>
+    <FormControl className={`${NO_WHEEL_CLASS} ${NO_DRAG_CLASS}`} isInvalid={!value} isDisabled={!options.length}>
       <Combobox
         value={value}
         placeholder={placeholder}

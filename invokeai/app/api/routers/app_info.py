@@ -10,15 +10,12 @@ from fastapi import Body
 from fastapi.routing import APIRouter
 from pydantic import BaseModel, Field
 
+from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.invocations.upscale import ESRGAN_MODELS
 from invokeai.app.services.invocation_cache.invocation_cache_common import InvocationCacheStatus
-from invokeai.backend.image_util.invisible_watermark import InvisibleWatermark
-from invokeai.backend.image_util.patchmatch import PatchMatch
-from invokeai.backend.image_util.safety_checker import SafetyChecker
+from invokeai.backend.image_util.infill_methods.patchmatch import PatchMatch
 from invokeai.backend.util.logging import logging
 from invokeai.version import __version__
-
-from ..dependencies import ApiDependencies
 
 
 class LogLevel(int, Enum):
@@ -42,6 +39,8 @@ class AppVersion(BaseModel):
     """App Version Response"""
 
     version: str = Field(description="App version")
+
+    highlights: Optional[list[str]] = Field(default=None, description="Highlights of release")
 
 
 class AppDependencyVersions(BaseModel):
@@ -101,7 +100,7 @@ async def get_app_deps() -> AppDependencyVersions:
 
 @app_router.get("/config", operation_id="get_config", status_code=200, response_model=AppConfig)
 async def get_config() -> AppConfig:
-    infill_methods = ["tile", "lama", "cv2"]
+    infill_methods = ["lama", "tile", "cv2", "color"]  # TODO: add mosaic back
     if PatchMatch.patchmatch_available():
         infill_methods.append("patchmatch")
 
@@ -110,13 +109,9 @@ async def get_config() -> AppConfig:
         upscaling_models.append(str(Path(model).stem))
     upscaler = Upscaler(upscaling_method="esrgan", upscaling_models=upscaling_models)
 
-    nsfw_methods = []
-    if SafetyChecker.safety_checker_available():
-        nsfw_methods.append("nsfw_checker")
+    nsfw_methods = ["nsfw_checker"]
 
-    watermarking_methods = []
-    if InvisibleWatermark.invisible_watermark_available():
-        watermarking_methods.append("invisible_watermark")
+    watermarking_methods = ["invisible_watermark"]
 
     return AppConfig(
         infill_methods=infill_methods,

@@ -1,40 +1,39 @@
 import { useAppDispatch } from 'app/store/storeHooks';
 import { useCancelCurrentQueueItem } from 'features/queue/hooks/useCancelCurrentQueueItem';
 import { useClearQueue } from 'features/queue/hooks/useClearQueue';
-import { useQueueBack } from 'features/queue/hooks/useQueueBack';
-import { useQueueFront } from 'features/queue/hooks/useQueueFront';
+import { useInvoke } from 'features/queue/hooks/useInvoke';
+import { useRegisteredHotkeys } from 'features/system/components/HotkeysModal/useHotkeyData';
 import { useFeatureStatus } from 'features/system/hooks/useFeatureStatus';
 import { setActiveTab } from 'features/ui/store/uiSlice';
-import { useHotkeys } from 'react-hotkeys-hook';
 
 export const useGlobalHotkeys = () => {
   const dispatch = useAppDispatch();
-  const isModelManagerEnabled = useFeatureStatus('modelManager').isFeatureEnabled;
-  const { queueBack, isDisabled: isDisabledQueueBack, isLoading: isLoadingQueueBack } = useQueueBack();
+  const isModelManagerEnabled = useFeatureStatus('modelManager');
+  const queue = useInvoke();
 
-  useHotkeys(
-    ['ctrl+enter', 'meta+enter'],
-    queueBack,
-    {
-      enabled: () => !isDisabledQueueBack && !isLoadingQueueBack,
+  useRegisteredHotkeys({
+    id: 'invoke',
+    category: 'app',
+    callback: queue.queueBack,
+    options: {
+      enabled: !queue.isDisabled && !queue.isLoading,
       preventDefault: true,
       enableOnFormTags: ['input', 'textarea', 'select'],
     },
-    [queueBack, isDisabledQueueBack, isLoadingQueueBack]
-  );
+    dependencies: [queue],
+  });
 
-  const { queueFront, isDisabled: isDisabledQueueFront, isLoading: isLoadingQueueFront } = useQueueFront();
-
-  useHotkeys(
-    ['ctrl+shift+enter', 'meta+shift+enter'],
-    queueFront,
-    {
-      enabled: () => !isDisabledQueueFront && !isLoadingQueueFront,
+  useRegisteredHotkeys({
+    id: 'invokeFront',
+    category: 'app',
+    callback: queue.queueFront,
+    options: {
+      enabled: !queue.isDisabled && !queue.isLoading,
       preventDefault: true,
       enableOnFormTags: ['input', 'textarea', 'select'],
     },
-    [queueFront, isDisabledQueueFront, isLoadingQueueFront]
-  );
+    dependencies: [queue],
+  });
 
   const {
     cancelQueueItem,
@@ -42,75 +41,75 @@ export const useGlobalHotkeys = () => {
     isLoading: isLoadingCancelQueueItem,
   } = useCancelCurrentQueueItem();
 
-  useHotkeys(
-    ['shift+x'],
-    cancelQueueItem,
-    {
-      enabled: () => !isDisabledCancelQueueItem && !isLoadingCancelQueueItem,
+  useRegisteredHotkeys({
+    id: 'cancelQueueItem',
+    category: 'app',
+    callback: cancelQueueItem,
+    options: {
+      enabled: !isDisabledCancelQueueItem && !isLoadingCancelQueueItem,
       preventDefault: true,
     },
-    [cancelQueueItem, isDisabledCancelQueueItem, isLoadingCancelQueueItem]
-  );
+    dependencies: [cancelQueueItem, isDisabledCancelQueueItem, isLoadingCancelQueueItem],
+  });
 
   const { clearQueue, isDisabled: isDisabledClearQueue, isLoading: isLoadingClearQueue } = useClearQueue();
 
-  useHotkeys(
-    ['ctrl+shift+x', 'meta+shift+x'],
-    clearQueue,
-    {
-      enabled: () => !isDisabledClearQueue && !isLoadingClearQueue,
+  useRegisteredHotkeys({
+    id: 'clearQueue',
+    category: 'app',
+    callback: clearQueue,
+    options: {
+      enabled: !isDisabledClearQueue && !isLoadingClearQueue,
       preventDefault: true,
     },
-    [clearQueue, isDisabledClearQueue, isLoadingClearQueue]
-  );
+    dependencies: [clearQueue, isDisabledClearQueue, isLoadingClearQueue],
+  });
 
-  useHotkeys(
-    '1',
-    () => {
-      dispatch(setActiveTab('txt2img'));
+  useRegisteredHotkeys({
+    id: 'selectCanvasTab',
+    category: 'app',
+    callback: () => {
+      dispatch(setActiveTab('canvas'));
     },
-    [dispatch]
-  );
+    dependencies: [dispatch],
+  });
 
-  useHotkeys(
-    '2',
-    () => {
-      dispatch(setActiveTab('img2img'));
+  useRegisteredHotkeys({
+    id: 'selectUpscalingTab',
+    category: 'app',
+    callback: () => {
+      dispatch(setActiveTab('upscaling'));
     },
-    [dispatch]
-  );
+    dependencies: [dispatch],
+  });
 
-  useHotkeys(
-    '3',
-    () => {
-      dispatch(setActiveTab('unifiedCanvas'));
+  useRegisteredHotkeys({
+    id: 'selectWorkflowsTab',
+    category: 'app',
+    callback: () => {
+      dispatch(setActiveTab('workflows'));
     },
-    [dispatch]
-  );
+    dependencies: [dispatch],
+  });
 
-  useHotkeys(
-    '4',
-    () => {
-      dispatch(setActiveTab('nodes'));
+  useRegisteredHotkeys({
+    id: 'selectModelsTab',
+    category: 'app',
+    callback: () => {
+      dispatch(setActiveTab('models'));
     },
-    [dispatch]
-  );
-
-  useHotkeys(
-    '5',
-    () => {
-      if (isModelManagerEnabled) {
-        dispatch(setActiveTab('modelManager'));
-      }
+    options: {
+      enabled: isModelManagerEnabled,
     },
-    [dispatch, isModelManagerEnabled]
-  );
+    dependencies: [dispatch, isModelManagerEnabled],
+  });
 
-  useHotkeys(
-    isModelManagerEnabled ? '6' : '5',
-    () => {
+  useRegisteredHotkeys({
+    id: 'selectQueueTab',
+    category: 'app',
+    callback: () => {
       dispatch(setActiveTab('queue'));
     },
-    [dispatch, isModelManagerEnabled]
-  );
+    dependencies: [dispatch, isModelManagerEnabled],
+  });
 };

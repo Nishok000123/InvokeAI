@@ -1,8 +1,8 @@
 import { ConfirmationAlertDialog, Flex, IconButton, Text, useDisclosure } from '@invoke-ai/ui-library';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
 import { nodeEditorReset } from 'features/nodes/store/nodesSlice';
-import { addToast } from 'features/system/store/systemSlice';
-import { makeToast } from 'features/system/util/makeToast';
+import { selectWorkflowIsTouched } from 'features/nodes/store/workflowSlice';
+import { toast } from 'features/toast/toast';
 import { memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PiTrashSimpleFill } from 'react-icons/pi';
@@ -11,19 +11,16 @@ const ClearFlowButton = () => {
   const dispatch = useAppDispatch();
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
-  const isTouched = useAppSelector((s) => s.workflow.isTouched);
+  const isTouched = useAppSelector(selectWorkflowIsTouched);
 
   const handleNewWorkflow = useCallback(() => {
     dispatch(nodeEditorReset());
 
-    dispatch(
-      addToast(
-        makeToast({
-          title: t('workflows.workflowCleared'),
-          status: 'success',
-        })
-      )
-    );
+    toast({
+      id: 'WORKFLOW_CLEARED',
+      title: t('workflows.workflowCleared'),
+      status: 'success',
+    });
 
     onClose();
   }, [dispatch, onClose, t]);
@@ -50,6 +47,7 @@ const ClearFlowButton = () => {
         onClose={onClose}
         title={t('nodes.clearWorkflow')}
         acceptCallback={handleNewWorkflow}
+        useInert={false}
       >
         <Flex flexDir="column" gap={2}>
           <Text>{t('nodes.clearWorkflowDesc')}</Text>

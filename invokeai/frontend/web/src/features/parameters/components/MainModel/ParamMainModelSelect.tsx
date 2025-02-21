@@ -1,58 +1,110 @@
-import { Combobox, FormControl, FormLabel, Tooltip } from '@invoke-ai/ui-library';
-import { createMemoizedSelector } from 'app/store/createMemoizedSelector';
+import { Box, Combobox, Flex, FormControl, FormLabel, Icon, Spacer, Tooltip } from '@invoke-ai/ui-library';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
+import { InformationalPopover } from 'common/components/InformationalPopover/InformationalPopover';
 import { useGroupedModelCombobox } from 'common/hooks/useGroupedModelCombobox';
+import { selectModelKey } from 'features/controlLayers/store/paramsSlice';
+import { zModelIdentifierField } from 'features/nodes/types/common';
 import { modelSelected } from 'features/parameters/store/actions';
-import { selectGenerationSlice } from 'features/parameters/store/generationSlice';
-import { pick } from 'lodash-es';
+import { selectActiveTab } from 'features/ui/store/uiSelectors';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { NON_REFINER_BASE_MODELS } from 'services/api/constants';
-import type { MainModelConfigEntity } from 'services/api/endpoints/models';
-import { getModelId, mainModelsAdapterSelectors, useGetMainModelsQuery } from 'services/api/endpoints/models';
-
-const selectModel = createMemoizedSelector(selectGenerationSlice, (generation) => generation.model);
+import { MdMoneyOff } from 'react-icons/md';
+import { useMainModels } from 'services/api/hooks/modelsByType';
+import { type AnyModelConfig, isCheckpointMainModelConfig, type MainModelConfig } from 'services/api/types';
 
 const ParamMainModelSelect = () => {
   const dispatch = useAppDispatch();
   const { t } = useTranslation();
-  const model = useAppSelector(selectModel);
-  const { data, isLoading } = useGetMainModelsQuery(NON_REFINER_BASE_MODELS);
+  const activeTabName = useAppSelector(selectActiveTab);
+  const selectedModelKey = useAppSelector(selectModelKey);
+  // const selectedModel = useAppSelector(selectModel);
+  const [modelConfigs, { isLoading }] = useMainModels();
+
+  const selectedModel = useMemo(() => {
+    if (!modelConfigs) {
+      return null;
+    }
+    if (selectedModelKey === null) {
+      return null;
+    }
+    const modelConfig = modelConfigs.find((model) => model.key === selectedModelKey);
+
+    if (!modelConfig) {
+      return null;
+    }
+
+    return modelConfig;
+  }, [modelConfigs, selectedModelKey]);
+
   const tooltipLabel = useMemo(() => {
-    if (!data || !model) {
+    if (!modelConfigs.length || !selectedModel) {
       return;
     }
-    return mainModelsAdapterSelectors.selectById(data, getModelId(model))?.description;
-  }, [data, model]);
+    return modelConfigs.find((m) => m.key === selectedModel?.key)?.description;
+  }, [modelConfigs, selectedModel]);
+
   const _onChange = useCallback(
-    (model: MainModelConfigEntity | null) => {
+    (model: MainModelConfig | null) => {
       if (!model) {
         return;
       }
-      dispatch(modelSelected(pick(model, ['base_model', 'model_name', 'model_type'])));
+      try {
+        dispatch(modelSelected(zModelIdentifierField.parse(model)));
+      } catch {
+        // no-op
+      }
     },
     [dispatch]
   );
+
+  const getIsDisabled = useCallback(
+    (model: AnyModelConfig): boolean => {
+      return activeTabName === 'upscaling' && model.base === 'flux';
+    },
+    [activeTabName]
+  );
+
   const { options, value, onChange, placeholder, noOptionsMessage } = useGroupedModelCombobox({
-    modelEntities: data,
+    modelConfigs,
+    selectedModel,
     onChange: _onChange,
-    selectedModel: model,
     isLoading,
+    getIsDisabled,
   });
 
+  const isFluxDevSelected = useMemo(() => {
+    return selectedModel && isCheckpointMainModelConfig(selectedModel) && selectedModel.config_path === 'flux-dev';
+  }, [selectedModel]);
+
   return (
-    <Tooltip label={tooltipLabel}>
-      <FormControl isDisabled={!options.length} isInvalid={!options.length}>
-        <FormLabel>{t('modelManager.model')}</FormLabel>
-        <Combobox
-          value={value}
-          placeholder={placeholder}
-          options={options}
-          onChange={onChange}
-          noOptionsMessage={noOptionsMessage}
-        />
-      </FormControl>
-    </Tooltip>
+    <FormControl isDisabled={!modelConfigs.length} isInvalid={!value || !modelConfigs.length}>
+      <Flex alignItems="center">
+        <InformationalPopover feature="paramModel">
+          <FormLabel>{t('modelManager.model')}</FormLabel>
+        </InformationalPopover>
+        {isFluxDevSelected ? (
+          <InformationalPopover feature="fluxDevLicense" hideDisable={true}>
+            <Flex justifyContent="flex-start">
+              <Icon as={MdMoneyOff} />
+            </Flex>
+          </InformationalPopover>
+        ) : (
+          <Spacer />
+        )}
+      </Flex>
+      <Tooltip label={tooltipLabel}>
+        <Box w="full" minW={0}>
+          <Combobox
+            value={value}
+            placeholder={placeholder}
+            options={options}
+            onChange={onChange}
+            noOptionsMessage={noOptionsMessage}
+            isInvalid={value?.isDisabled}
+          />
+        </Box>
+      </Tooltip>
+    </FormControl>
   );
 };
 

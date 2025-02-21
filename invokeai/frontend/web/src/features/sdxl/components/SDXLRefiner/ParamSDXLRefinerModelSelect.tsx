@@ -1,57 +1,65 @@
-import { Combobox, FormControl, FormLabel } from '@invoke-ai/ui-library';
-import { createMemoizedSelector } from 'app/store/createMemoizedSelector';
+import { Combobox, Flex, FormControl, FormLabel, IconButton } from '@invoke-ai/ui-library';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
+import { InformationalPopover } from 'common/components/InformationalPopover/InformationalPopover';
 import { useModelCombobox } from 'common/hooks/useModelCombobox';
-import { refinerModelChanged, selectSdxlSlice } from 'features/sdxl/store/sdxlSlice';
+import { refinerModelChanged, selectRefinerModel } from 'features/controlLayers/store/paramsSlice';
+import { zModelIdentifierField } from 'features/nodes/types/common';
 import { memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { REFINER_BASE_MODELS } from 'services/api/constants';
-import type { MainModelConfigEntity } from 'services/api/endpoints/models';
-import { useGetMainModelsQuery } from 'services/api/endpoints/models';
+import { PiXBold } from 'react-icons/pi';
+import { useRefinerModels } from 'services/api/hooks/modelsByType';
+import type { MainModelConfig } from 'services/api/types';
 
-const selectModel = createMemoizedSelector(selectSdxlSlice, (sdxl) => sdxl.refinerModel);
-
-const optionsFilter = (model: MainModelConfigEntity) => model.base_model === 'sdxl-refiner';
+const optionsFilter = (model: MainModelConfig) => model.base === 'sdxl-refiner';
 
 const ParamSDXLRefinerModelSelect = () => {
   const dispatch = useAppDispatch();
-  const model = useAppSelector(selectModel);
+  const model = useAppSelector(selectRefinerModel);
   const { t } = useTranslation();
-  const { data, isLoading } = useGetMainModelsQuery(REFINER_BASE_MODELS);
+  const [modelConfigs, { isLoading }] = useRefinerModels();
   const _onChange = useCallback(
-    (model: MainModelConfigEntity | null) => {
+    (model: MainModelConfig | null) => {
       if (!model) {
         dispatch(refinerModelChanged(null));
         return;
       }
-      dispatch(
-        refinerModelChanged({
-          base_model: 'sdxl-refiner',
-          model_name: model.model_name,
-          model_type: model.model_type,
-        })
-      );
+      dispatch(refinerModelChanged(zModelIdentifierField.parse(model)));
     },
     [dispatch]
   );
   const { options, value, onChange, placeholder, noOptionsMessage } = useModelCombobox({
-    modelEntities: data,
+    modelConfigs,
     onChange: _onChange,
     selectedModel: model,
     isLoading,
     optionsFilter,
   });
+  const onReset = useCallback(() => {
+    _onChange(null);
+  }, [_onChange]);
+
   return (
-    <FormControl isDisabled={!options.length} isInvalid={!options.length}>
-      <FormLabel>{t('sdxl.refinermodel')}</FormLabel>
-      <Combobox
-        value={value}
-        placeholder={placeholder}
-        options={options}
-        onChange={onChange}
-        noOptionsMessage={noOptionsMessage}
-        isClearable
-      />
+    <FormControl isDisabled={!options.length} isInvalid={!options.length} w="full">
+      <InformationalPopover feature="refinerModel">
+        <FormLabel>{t('sdxl.refinermodel')}</FormLabel>
+      </InformationalPopover>
+      <Flex w="full" minW={0} gap={2} alignItems="center">
+        <Combobox
+          value={value}
+          placeholder={placeholder}
+          options={options}
+          onChange={onChange}
+          noOptionsMessage={noOptionsMessage}
+        />
+        <IconButton
+          size="sm"
+          variant="ghost"
+          icon={<PiXBold />}
+          aria-label={t('common.reset')}
+          onClick={onReset}
+          isDisabled={!value}
+        />
+      </Flex>
     </FormControl>
   );
 };

@@ -1,34 +1,38 @@
 import { logger } from 'app/logging/logger';
+import { deepClone } from 'common/util/deepClone';
 import { parseify } from 'common/util/serialize';
+import type { Templates } from 'features/nodes/store/types';
 import { FieldParseError } from 'features/nodes/types/error';
-import type { FieldInputTemplate, FieldOutputTemplate } from 'features/nodes/types/field';
+import {
+  type FieldInputTemplate,
+  type FieldOutputTemplate,
+  type FieldType,
+  isStatefulFieldType,
+} from 'features/nodes/types/field';
 import type { InvocationTemplate } from 'features/nodes/types/invocation';
-import type { InvocationSchemaObject } from 'features/nodes/types/openapi';
+import type { InvocationFieldSchema, InvocationSchemaObject } from 'features/nodes/types/openapi';
 import {
   isInvocationFieldSchema,
   isInvocationOutputSchemaObject,
   isInvocationSchemaObject,
 } from 'features/nodes/types/openapi';
 import { t } from 'i18next';
-import { reduce } from 'lodash-es';
+import { isEqual, reduce } from 'lodash-es';
 import type { OpenAPIV3_1 } from 'openapi-types';
+import { serializeError } from 'serialize-error';
+import type { JsonObject } from 'type-fest';
 
 import { buildFieldInputTemplate } from './buildFieldInputTemplate';
 import { buildFieldOutputTemplate } from './buildFieldOutputTemplate';
-import { parseFieldType } from './parseFieldType';
+import { isCollectionFieldType, parseFieldType } from './parseFieldType';
+
+const log = logger('system');
 
 const RESERVED_INPUT_FIELD_NAMES = ['id', 'type', 'use_cache'];
 const RESERVED_OUTPUT_FIELD_NAMES = ['type'];
 const RESERVED_FIELD_TYPES = ['IsIntermediate'];
 
-const invocationDenylist: string[] = [
-  'graph',
-  'linear_ui_output',
-  'l2i_onnx',
-  'prompt_onnx',
-  't2l_onnx',
-  'onnx_model_loader',
-];
+const invocationDenylist: string[] = ['graph', 'linear_ui_output'];
 
 const isReservedInputField = (nodeType: string, fieldName: string) => {
   if (RESERVED_INPUT_FIELD_NAMES.includes(fieldName)) {
@@ -54,7 +58,36 @@ const isAllowedOutputField = (nodeType: string, fieldName: string) => {
   if (RESERVED_OUTPUT_FIELD_NAMES.includes(fieldName)) {
     return false;
   }
+  if (nodeType === 'image_batch' && fieldName !== 'image') {
+    return false;
+  }
   return true;
+};
+
+const isBatchInputField = (nodeType: string, fieldName: string) => {
+  if (nodeType === 'float_batch' && fieldName === 'floats') {
+    return true;
+  }
+  if (nodeType === 'integer_batch' && fieldName === 'integers') {
+    return true;
+  }
+  if (nodeType === 'string_batch' && fieldName === 'strings') {
+    return true;
+  }
+  return false;
+};
+
+const isBatchOutputField = (nodeType: string, fieldName: string) => {
+  if (nodeType === 'float_generator' && fieldName === 'floats') {
+    return true;
+  }
+  if (nodeType === 'integer_generator' && fieldName === 'integers') {
+    return true;
+  }
+  if (nodeType === 'string_generator' && fieldName === 'strings') {
+    return true;
+  }
+  return false;
 };
 
 const isNotInDenylist = (schema: InvocationSchemaObject) =>
@@ -64,14 +97,14 @@ export const parseSchema = (
   openAPI: OpenAPIV3_1.Document,
   nodesAllowlistExtra: string[] | undefined = undefined,
   nodesDenylistExtra: string[] | undefined = undefined
-): Record<string, InvocationTemplate> => {
+): Templates => {
   const filteredSchemas = Object.values(openAPI.components?.schemas ?? {})
     .filter(isInvocationSchemaObject)
     .filter(isNotInDenylist)
     .filter((schema) => (nodesAllowlistExtra ? nodesAllowlistExtra.includes(schema.properties.type.default) : true))
     .filter((schema) => (nodesDenylistExtra ? !nodesDenylistExtra.includes(schema.properties.type.default) : true));
 
-  const invocations = filteredSchemas.reduce<Record<string, InvocationTemplate>>((invocationsAccumulator, schema) => {
+  const invocations = filteredSchemas.reduce<Templates>((invocationsAccumulator, schema) => {
     const type = schema.properties.type.default;
     const title = schema.title.replace('Invocation', '');
     const tags = schema.tags ?? [];
@@ -84,48 +117,49 @@ export const parseSchema = (
       schema.properties,
       (inputsAccumulator: Record<string, FieldInputTemplate>, property, propertyName) => {
         if (isReservedInputField(type, propertyName)) {
-          logger('nodes').trace(
-            { node: type, field: propertyName, schema: parseify(property) },
+          log.trace(
+            { node: type, field: propertyName, schema: property } as JsonObject,
             'Skipped reserved input field'
           );
           return inputsAccumulator;
         }
 
         if (!isInvocationFieldSchema(property)) {
-          logger('nodes').warn(
-            { node: type, field: propertyName, schema: parseify(property) },
-            'Unhandled input property'
-          );
+          log.warn({ node: type, field: propertyName, schema: parseify(property) }, 'Unhandled input property');
           return inputsAccumulator;
         }
 
-        try {
-          const fieldType = parseFieldType(property);
+        const fieldTypeOverride: FieldType | null = property.ui_type
+          ? {
+              name: property.ui_type,
+              cardinality: isCollectionFieldType(property.ui_type) ? 'COLLECTION' : 'SINGLE',
+              batch: false,
+            }
+          : null;
 
-          if (isReservedFieldType(fieldType.name)) {
-            // Skip processing this reserved field
-            return inputsAccumulator;
-          }
+        const originalFieldType = getFieldType(property, propertyName, type, 'input');
 
-          const fieldInputTemplate = buildFieldInputTemplate(property, propertyName, fieldType);
-
-          inputsAccumulator[propertyName] = fieldInputTemplate;
-        } catch (e) {
-          if (e instanceof FieldParseError) {
-            logger('nodes').warn(
-              {
-                node: type,
-                field: propertyName,
-                schema: parseify(property),
-              },
-              t('nodes.inputFieldTypeParseError', {
-                node: type,
-                field: propertyName,
-                message: e.message,
-              })
-            );
-          }
+        const fieldType = fieldTypeOverride ?? originalFieldType;
+        if (!fieldType) {
+          log.trace({ node: type, field: propertyName, schema: parseify(property) }, 'Unable to parse field type');
+          return inputsAccumulator;
         }
+
+        if (isReservedFieldType(fieldType.name)) {
+          log.trace({ node: type, field: propertyName, schema: parseify(property) }, 'Skipped reserved input field');
+          return inputsAccumulator;
+        }
+
+        if (isStatefulFieldType(fieldType) && originalFieldType && !isEqual(originalFieldType, fieldType)) {
+          fieldType.originalType = deepClone(originalFieldType);
+        }
+
+        if (isBatchInputField(type, propertyName)) {
+          fieldType.batch = true;
+        }
+
+        const fieldInputTemplate = buildFieldInputTemplate(property, propertyName, fieldType);
+        inputsAccumulator[propertyName] = fieldInputTemplate;
 
         return inputsAccumulator;
       },
@@ -135,18 +169,18 @@ export const parseSchema = (
     const outputSchemaName = schema.output.$ref.split('/').pop();
 
     if (!outputSchemaName) {
-      logger('nodes').warn({ outputRefObject: parseify(schema.output) }, 'No output schema name found in ref object');
+      log.warn({ outputRefObject: parseify(schema.output) }, 'No output schema name found in ref object');
       return invocationsAccumulator;
     }
 
     const outputSchema = openAPI.components?.schemas?.[outputSchemaName];
     if (!outputSchema) {
-      logger('nodes').warn({ outputSchemaName }, 'Output schema not found');
+      log.warn({ outputSchemaName }, 'Output schema not found');
       return invocationsAccumulator;
     }
 
     if (!isInvocationOutputSchemaObject(outputSchema)) {
-      logger('nodes').error({ outputSchema: parseify(outputSchema) }, 'Invalid output schema');
+      log.error({ outputSchema: parseify(outputSchema) }, 'Invalid output schema');
       return invocationsAccumulator;
     }
 
@@ -156,55 +190,42 @@ export const parseSchema = (
       outputSchema.properties,
       (outputsAccumulator, property, propertyName) => {
         if (!isAllowedOutputField(type, propertyName)) {
-          logger('nodes').trace(
-            { node: type, field: propertyName, schema: parseify(property) },
-            'Skipped reserved output field'
-          );
+          log.trace({ node: type, field: propertyName, schema: parseify(property) }, 'Skipped reserved output field');
           return outputsAccumulator;
         }
 
         if (!isInvocationFieldSchema(property)) {
-          logger('nodes').warn(
-            { node: type, field: propertyName, schema: parseify(property) },
-            'Unhandled output property'
-          );
+          log.warn({ node: type, field: propertyName, schema: parseify(property) }, 'Unhandled output property');
           return outputsAccumulator;
         }
 
-        try {
-          const fieldType = parseFieldType(property);
+        const fieldTypeOverride: FieldType | null = property.ui_type
+          ? {
+              name: property.ui_type,
+              cardinality: isCollectionFieldType(property.ui_type) ? 'COLLECTION' : 'SINGLE',
+              batch: false,
+            }
+          : null;
 
-          if (!fieldType) {
-            logger('nodes').warn(
-              {
-                node: type,
-                field: propertyName,
-                schema: parseify(property),
-              },
-              'Missing output field type'
-            );
-            return outputsAccumulator;
-          }
+        const originalFieldType = getFieldType(property, propertyName, type, 'output');
 
-          const fieldOutputTemplate = buildFieldOutputTemplate(property, propertyName, fieldType);
-
-          outputsAccumulator[propertyName] = fieldOutputTemplate;
-        } catch (e) {
-          if (e instanceof FieldParseError) {
-            logger('nodes').warn(
-              {
-                node: type,
-                field: propertyName,
-                schema: parseify(property),
-              },
-              t('nodes.outputFieldTypeParseError', {
-                node: type,
-                field: propertyName,
-                message: e.message,
-              })
-            );
-          }
+        const fieldType = fieldTypeOverride ?? originalFieldType;
+        if (!fieldType) {
+          log.trace({ node: type, field: propertyName, schema: parseify(property) }, 'Unable to parse field type');
+          return outputsAccumulator;
         }
+
+        if (isStatefulFieldType(fieldType) && originalFieldType && !isEqual(originalFieldType, fieldType)) {
+          fieldType.originalType = deepClone(originalFieldType);
+        }
+
+        if (isBatchOutputField(type, propertyName)) {
+          fieldType.batch = true;
+        }
+
+        const fieldOutputTemplate = buildFieldOutputTemplate(property, propertyName, fieldType);
+
+        outputsAccumulator[propertyName] = fieldOutputTemplate;
         return outputsAccumulator;
       },
       {} as Record<string, FieldOutputTemplate>
@@ -232,4 +253,46 @@ export const parseSchema = (
   }, {});
 
   return invocations;
+};
+
+const getFieldType = (
+  property: InvocationFieldSchema,
+  propertyName: string,
+  type: string,
+  kind: 'input' | 'output'
+): FieldType | null => {
+  try {
+    return parseFieldType(property);
+  } catch (e) {
+    const tKey = kind === 'input' ? 'nodes.inputFieldTypeParseError' : 'nodes.outputFieldTypeParseError';
+    if (e instanceof FieldParseError) {
+      log.warn(
+        {
+          node: type,
+          field: propertyName,
+          schema: parseify(property),
+        },
+        t(tKey, {
+          node: type,
+          field: propertyName,
+          message: e.message,
+        })
+      );
+    } else {
+      log.warn(
+        {
+          node: type,
+          field: propertyName,
+          schema: parseify(property),
+          error: serializeError(e),
+        },
+        t(tKey, {
+          node: type,
+          field: propertyName,
+          message: 'unknown error',
+        })
+      );
+    }
+    return null;
+  }
 };
