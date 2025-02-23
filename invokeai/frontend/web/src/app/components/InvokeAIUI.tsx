@@ -1,29 +1,30 @@
 import 'i18n';
 
 import type { Middleware } from '@reduxjs/toolkit';
-import { $socketOptions } from 'app/hooks/useSocketIO';
+import type { StudioInitAction } from 'app/hooks/useStudioInitAction';
+import type { LoggingOverrides } from 'app/logging/logger';
+import { $loggingOverrides, configureLogging } from 'app/logging/logger';
 import { $authToken } from 'app/store/nanostores/authToken';
 import { $baseUrl } from 'app/store/nanostores/baseUrl';
 import { $customNavComponent } from 'app/store/nanostores/customNavComponent';
 import type { CustomStarUi } from 'app/store/nanostores/customStarUI';
 import { $customStarUI } from 'app/store/nanostores/customStarUI';
-import { $galleryHeader } from 'app/store/nanostores/galleryHeader';
 import { $isDebugging } from 'app/store/nanostores/isDebugging';
 import { $logo } from 'app/store/nanostores/logo';
 import { $openAPISchemaUrl } from 'app/store/nanostores/openAPISchemaUrl';
-import { $projectId } from 'app/store/nanostores/projectId';
+import { $projectId, $projectName, $projectUrl } from 'app/store/nanostores/projectId';
 import { $queueId, DEFAULT_QUEUE_ID } from 'app/store/nanostores/queueId';
 import { $store } from 'app/store/nanostores/store';
 import { $workflowCategories } from 'app/store/nanostores/workflowCategories';
 import { createStore } from 'app/store/store';
 import type { PartialAppConfig } from 'app/types/invokeai';
 import Loading from 'common/components/Loading/Loading';
-import AppDndContext from 'features/dnd/components/AppDndContext';
 import type { WorkflowCategory } from 'features/nodes/types/workflow';
 import type { PropsWithChildren, ReactNode } from 'react';
-import React, { lazy, memo, useEffect, useMemo } from 'react';
+import React, { lazy, memo, useEffect, useLayoutEffect, useMemo } from 'react';
 import { Provider } from 'react-redux';
 import { addMiddleware, resetMiddlewares } from 'redux-dynamic-middlewares';
+import { $socketOptions } from 'services/events/stores';
 import type { ManagerOptions, SocketOptions } from 'socket.io-client';
 
 const App = lazy(() => import('./App'));
@@ -37,17 +38,16 @@ interface Props extends PropsWithChildren {
   customNavComponent?: ReactNode;
   middleware?: Middleware[];
   projectId?: string;
-  galleryHeader?: ReactNode;
+  projectName?: string;
+  projectUrl?: string;
   queueId?: string;
-  selectedImage?: {
-    imageName: string;
-    action: 'sendToImg2Img' | 'sendToCanvas' | 'useAllParameters';
-  };
+  studioInitAction?: StudioInitAction;
   customStarUi?: CustomStarUi;
   socketOptions?: Partial<ManagerOptions & SocketOptions>;
   isDebugging?: boolean;
   logo?: ReactNode;
   workflowCategories?: WorkflowCategory[];
+  loggingOverrides?: LoggingOverrides;
 }
 
 const InvokeAIUI = ({
@@ -58,15 +58,35 @@ const InvokeAIUI = ({
   customNavComponent,
   middleware,
   projectId,
-  galleryHeader,
+  projectName,
+  projectUrl,
   queueId,
-  selectedImage,
+  studioInitAction,
   customStarUi,
   socketOptions,
   isDebugging = false,
   logo,
   workflowCategories,
+  loggingOverrides,
 }: Props) => {
+  useLayoutEffect(() => {
+    /*
+     * We need to configure logging before anything else happens - useLayoutEffect ensures we set this at the first
+     * possible opportunity.
+     *
+     * Once redux initializes, we will check the user's settings and update the logging config accordingly. See
+     * `useSyncLoggingConfig`.
+     */
+    $loggingOverrides.set(loggingOverrides);
+
+    // Until we get the user's settings, we will use the overrides OR default values.
+    configureLogging(
+      loggingOverrides?.logIsEnabled ?? true,
+      loggingOverrides?.logLevel ?? 'debug',
+      loggingOverrides?.logNamespaces ?? '*'
+    );
+  }, [loggingOverrides]);
+
   useEffect(() => {
     // configure API client token
     if (token) {
@@ -108,7 +128,7 @@ const InvokeAIUI = ({
       $projectId.set(undefined);
       $queueId.set(DEFAULT_QUEUE_ID);
     };
-  }, [apiUrl, token, middleware, projectId, queueId]);
+  }, [apiUrl, token, middleware, projectId, queueId, projectName, projectUrl]);
 
   useEffect(() => {
     if (customStarUi) {
@@ -141,14 +161,20 @@ const InvokeAIUI = ({
   }, [openAPISchemaUrl]);
 
   useEffect(() => {
-    if (galleryHeader) {
-      $galleryHeader.set(galleryHeader);
-    }
+    $projectName.set(projectName);
 
     return () => {
-      $galleryHeader.set(undefined);
+      $projectName.set(undefined);
     };
-  }, [galleryHeader]);
+  }, [projectName]);
+
+  useEffect(() => {
+    $projectUrl.set(projectUrl);
+
+    return () => {
+      $projectUrl.set(undefined);
+    };
+  }, [projectUrl]);
 
   useEffect(() => {
     if (logo) {
@@ -210,9 +236,7 @@ const InvokeAIUI = ({
       <Provider store={store}>
         <React.Suspense fallback={<Loading />}>
           <ThemeLocaleProvider>
-            <AppDndContext>
-              <App config={config} selectedImage={selectedImage} />
-            </AppDndContext>
+            <App config={config} studioInitAction={studioInitAction} />
           </ThemeLocaleProvider>
         </React.Suspense>
       </Provider>

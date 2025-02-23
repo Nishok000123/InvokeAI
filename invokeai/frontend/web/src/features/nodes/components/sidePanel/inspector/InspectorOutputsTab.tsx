@@ -1,47 +1,46 @@
 import { Box, Flex } from '@invoke-ai/ui-library';
-import { createMemoizedSelector } from 'app/store/createMemoizedSelector';
 import { useAppSelector } from 'app/store/storeHooks';
 import { IAINoContentFallback } from 'common/components/IAIImageFallback';
 import ScrollableContent from 'common/components/OverlayScrollbars/ScrollableContent';
 import DataViewer from 'features/gallery/components/ImageMetadataViewer/DataViewer';
-import { selectNodesSlice } from 'features/nodes/store/nodesSlice';
-import { selectNodeTemplatesSlice } from 'features/nodes/store/nodeTemplatesSlice';
-import { isInvocationNode } from 'features/nodes/types/invocation';
+import { TemplateGate } from 'features/nodes/components/sidePanel/inspector/NodeTemplateGate';
+import { useNodeExecutionState } from 'features/nodes/hooks/useNodeExecutionState';
+import { useNodeTemplate } from 'features/nodes/hooks/useNodeTemplate';
+import { selectLastSelectedNodeId } from 'features/nodes/store/selectors';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ImageOutput } from 'services/api/types';
-import type { AnyResult } from 'services/events/types';
+import type { AnyInvocationOutput, ImageOutput } from 'services/api/types';
 
-import ImageOutputPreview from './outputs/ImageOutputPreview';
-
-const selector = createMemoizedSelector(selectNodesSlice, selectNodeTemplatesSlice, (nodes, nodeTemplates) => {
-  const lastSelectedNodeId = nodes.selectedNodes[nodes.selectedNodes.length - 1];
-
-  const lastSelectedNode = nodes.nodes.find((node) => node.id === lastSelectedNodeId);
-
-  const lastSelectedNodeTemplate = lastSelectedNode ? nodeTemplates.templates[lastSelectedNode.data.type] : undefined;
-
-  const nes = nodes.nodeExecutionStates[lastSelectedNodeId ?? '__UNKNOWN_NODE__'];
-
-  if (!isInvocationNode(lastSelectedNode) || !nes || !lastSelectedNodeTemplate) {
-    return;
-  }
-
-  return {
-    outputs: nes.outputs,
-    outputType: lastSelectedNodeTemplate.outputType,
-  };
-});
+import ImageOutputPreview from './ImageOutputPreview';
 
 const InspectorOutputsTab = () => {
-  const data = useAppSelector(selector);
+  const lastSelectedNodeId = useAppSelector(selectLastSelectedNodeId);
   const { t } = useTranslation();
 
-  if (!data) {
+  if (!lastSelectedNodeId) {
     return <IAINoContentFallback label={t('nodes.noNodeSelected')} icon={null} />;
   }
 
-  if (data.outputs.length === 0) {
+  return (
+    <TemplateGate
+      nodeId={lastSelectedNodeId}
+      fallback={<IAINoContentFallback label={t('nodes.noNodeSelected')} icon={null} />}
+    >
+      <Content nodeId={lastSelectedNodeId} />
+    </TemplateGate>
+  );
+};
+
+export default memo(InspectorOutputsTab);
+
+const getKey = (result: AnyInvocationOutput, i: number) => `${result.type}-${i}`;
+
+const Content = memo(({ nodeId }: { nodeId: string }) => {
+  const { t } = useTranslation();
+  const template = useNodeTemplate(nodeId);
+  const nes = useNodeExecutionState(nodeId);
+
+  if (!nes || nes.outputs.length === 0) {
     return <IAINoContentFallback label={t('nodes.noOutputRecorded')} icon={null} />;
   }
 
@@ -49,19 +48,16 @@ const InspectorOutputsTab = () => {
     <Box position="relative" w="full" h="full">
       <ScrollableContent>
         <Flex position="relative" flexDir="column" alignItems="flex-start" p={1} gap={2} h="full" w="full">
-          {data.outputType === 'image_output' ? (
-            data.outputs.map((result, i) => (
+          {template.outputType === 'image_output' ? (
+            nes.outputs.map((result, i) => (
               <ImageOutputPreview key={getKey(result, i)} output={result as ImageOutput} />
             ))
           ) : (
-            <DataViewer data={data.outputs} label={t('nodes.nodeOutputs')} />
+            <DataViewer data={nes.outputs} label={t('nodes.nodeOutputs')} bg="base.850" color="base.200" />
           )}
         </Flex>
       </ScrollableContent>
     </Box>
   );
-};
-
-export default memo(InspectorOutputsTab);
-
-const getKey = (result: AnyResult, i: number) => `${result.type}-${i}`;
+});
+Content.displayName = 'Content';

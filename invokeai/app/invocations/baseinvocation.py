@@ -4,27 +4,43 @@ from __future__ import annotations
 
 import inspect
 import re
+import sys
 import warnings
 from abc import ABC, abstractmethod
 from enum import Enum
 from inspect import signature
-from types import UnionType
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Literal, Optional, Type, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Callable,
+    ClassVar,
+    Iterable,
+    Literal,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+)
 
 import semver
-from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, create_model
-from pydantic.fields import FieldInfo, _Unset
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, create_model
+from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
+from typing_extensions import TypeAliasType
 
-from invokeai.app.services.config.config_default import InvokeAIAppConfig
-from invokeai.app.services.workflow_records.workflow_records_common import WorkflowWithoutID
-from invokeai.app.shared.fields import FieldDescriptions
+from invokeai.app.invocations.fields import (
+    FieldKind,
+    Input,
+)
+from invokeai.app.services.config.config_default import get_config
+from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.metaenum import MetaEnum
 from invokeai.app.util.misc import uuid_string
 from invokeai.backend.util.logging import InvokeAILogger
 
 if TYPE_CHECKING:
-    from ..services.invocation_services import InvocationServices
+    from invokeai.app.services.invocation_services import InvocationServices
 
 logger = InvokeAILogger.get_logger()
 
@@ -45,398 +61,17 @@ class Classification(str, Enum, metaclass=MetaEnum):
     - `Stable`: The invocation, including its inputs/outputs and internal logic, is stable. You may build workflows with it, having confidence that they will not break because of a change in this invocation.
     - `Beta`: The invocation is not yet stable, but is planned to be stable in the future. Workflows built around this invocation may break, but we are committed to supporting this invocation long-term.
     - `Prototype`: The invocation is not yet stable and may be removed from the application at any time. Workflows built around this invocation may break, and we are *not* committed to supporting this invocation.
+    - `Deprecated`: The invocation is deprecated and may be removed in a future version.
+    - `Internal`: The invocation is not intended for use by end-users. It may be changed or removed at any time, but is exposed for users to play with.
+    - `Special`: The invocation is a special case and does not fit into any of the other classifications.
     """
 
     Stable = "stable"
     Beta = "beta"
     Prototype = "prototype"
-
-
-class Input(str, Enum, metaclass=MetaEnum):
-    """
-    The type of input a field accepts.
-    - `Input.Direct`: The field must have its value provided directly, when the invocation and field \
-      are instantiated.
-    - `Input.Connection`: The field must have its value provided by a connection.
-    - `Input.Any`: The field may have its value provided either directly or by a connection.
-    """
-
-    Connection = "connection"
-    Direct = "direct"
-    Any = "any"
-
-
-class FieldKind(str, Enum, metaclass=MetaEnum):
-    """
-    The kind of field.
-    - `Input`: An input field on a node.
-    - `Output`: An output field on a node.
-    - `Internal`: A field which is treated as an input, but cannot be used in node definitions. Metadata is
-    one example. It is provided to nodes via the WithMetadata class, and we want to reserve the field name
-    "metadata" for this on all nodes. `FieldKind` is used to short-circuit the field name validation logic,
-    allowing "metadata" for that field.
-    - `NodeAttribute`: The field is a node attribute. These are fields which are not inputs or outputs,
-    but which are used to store information about the node. For example, the `id` and `type` fields are node
-    attributes.
-
-    The presence of this in `json_schema_extra["field_kind"]` is used when initializing node schemas on app
-    startup, and when generating the OpenAPI schema for the workflow editor.
-    """
-
-    Input = "input"
-    Output = "output"
+    Deprecated = "deprecated"
     Internal = "internal"
-    NodeAttribute = "node_attribute"
-
-
-class UIType(str, Enum, metaclass=MetaEnum):
-    """
-    Type hints for the UI for situations in which the field type is not enough to infer the correct UI type.
-
-    - Model Fields
-    The most common node-author-facing use will be for model fields. Internally, there is no difference
-    between SD-1, SD-2 and SDXL model fields - they all use the class `MainModelField`. To ensure the
-    base-model-specific UI is rendered, use e.g. `ui_type=UIType.SDXLMainModelField` to indicate that
-    the field is an SDXL main model field.
-
-    - Any Field
-    We cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to
-    indicate that the field accepts any type. Use with caution. This cannot be used on outputs.
-
-    - Scheduler Field
-    Special handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.
-
-    - Internal Fields
-    Similar to the Any Field, the `collect` and `iterate` nodes make use of `typing.Any`. To facilitate
-    handling these types in the client, we use `UIType._Collection` and `UIType._CollectionItem`. These
-    should not be used by node authors.
-
-    - DEPRECATED Fields
-    These types are deprecated and should not be used by node authors. A warning will be logged if one is
-    used, and the type will be ignored. They are included here for backwards compatibility.
-    """
-
-    # region Model Field Types
-    SDXLMainModel = "SDXLMainModelField"
-    SDXLRefinerModel = "SDXLRefinerModelField"
-    ONNXModel = "ONNXModelField"
-    VaeModel = "VAEModelField"
-    LoRAModel = "LoRAModelField"
-    ControlNetModel = "ControlNetModelField"
-    IPAdapterModel = "IPAdapterModelField"
-    # endregion
-
-    # region Misc Field Types
-    Scheduler = "SchedulerField"
-    Any = "AnyField"
-    # endregion
-
-    # region Internal Field Types
-    _Collection = "CollectionField"
-    _CollectionItem = "CollectionItemField"
-    # endregion
-
-    # region DEPRECATED
-    Boolean = "DEPRECATED_Boolean"
-    Color = "DEPRECATED_Color"
-    Conditioning = "DEPRECATED_Conditioning"
-    Control = "DEPRECATED_Control"
-    Float = "DEPRECATED_Float"
-    Image = "DEPRECATED_Image"
-    Integer = "DEPRECATED_Integer"
-    Latents = "DEPRECATED_Latents"
-    String = "DEPRECATED_String"
-    BooleanCollection = "DEPRECATED_BooleanCollection"
-    ColorCollection = "DEPRECATED_ColorCollection"
-    ConditioningCollection = "DEPRECATED_ConditioningCollection"
-    ControlCollection = "DEPRECATED_ControlCollection"
-    FloatCollection = "DEPRECATED_FloatCollection"
-    ImageCollection = "DEPRECATED_ImageCollection"
-    IntegerCollection = "DEPRECATED_IntegerCollection"
-    LatentsCollection = "DEPRECATED_LatentsCollection"
-    StringCollection = "DEPRECATED_StringCollection"
-    BooleanPolymorphic = "DEPRECATED_BooleanPolymorphic"
-    ColorPolymorphic = "DEPRECATED_ColorPolymorphic"
-    ConditioningPolymorphic = "DEPRECATED_ConditioningPolymorphic"
-    ControlPolymorphic = "DEPRECATED_ControlPolymorphic"
-    FloatPolymorphic = "DEPRECATED_FloatPolymorphic"
-    ImagePolymorphic = "DEPRECATED_ImagePolymorphic"
-    IntegerPolymorphic = "DEPRECATED_IntegerPolymorphic"
-    LatentsPolymorphic = "DEPRECATED_LatentsPolymorphic"
-    StringPolymorphic = "DEPRECATED_StringPolymorphic"
-    MainModel = "DEPRECATED_MainModel"
-    UNet = "DEPRECATED_UNet"
-    Vae = "DEPRECATED_Vae"
-    CLIP = "DEPRECATED_CLIP"
-    Collection = "DEPRECATED_Collection"
-    CollectionItem = "DEPRECATED_CollectionItem"
-    Enum = "DEPRECATED_Enum"
-    WorkflowField = "DEPRECATED_WorkflowField"
-    IsIntermediate = "DEPRECATED_IsIntermediate"
-    BoardField = "DEPRECATED_BoardField"
-    MetadataItem = "DEPRECATED_MetadataItem"
-    MetadataItemCollection = "DEPRECATED_MetadataItemCollection"
-    MetadataItemPolymorphic = "DEPRECATED_MetadataItemPolymorphic"
-    MetadataDict = "DEPRECATED_MetadataDict"
-    # endregion
-
-
-class UIComponent(str, Enum, metaclass=MetaEnum):
-    """
-    The type of UI component to use for a field, used to override the default components, which are
-    inferred from the field type.
-    """
-
-    None_ = "none"
-    Textarea = "textarea"
-    Slider = "slider"
-
-
-class InputFieldJSONSchemaExtra(BaseModel):
-    """
-    Extra attributes to be added to input fields and their OpenAPI schema. Used during graph execution,
-    and by the workflow editor during schema parsing and UI rendering.
-    """
-
-    input: Input
-    orig_required: bool
-    field_kind: FieldKind
-    default: Optional[Any] = None
-    orig_default: Optional[Any] = None
-    ui_hidden: bool = False
-    ui_type: Optional[UIType] = None
-    ui_component: Optional[UIComponent] = None
-    ui_order: Optional[int] = None
-    ui_choice_labels: Optional[dict[str, str]] = None
-
-    model_config = ConfigDict(
-        validate_assignment=True,
-        json_schema_serialization_defaults_required=True,
-    )
-
-
-class OutputFieldJSONSchemaExtra(BaseModel):
-    """
-    Extra attributes to be added to input fields and their OpenAPI schema. Used by the workflow editor
-    during schema parsing and UI rendering.
-    """
-
-    field_kind: FieldKind
-    ui_hidden: bool
-    ui_type: Optional[UIType]
-    ui_order: Optional[int]
-
-    model_config = ConfigDict(
-        validate_assignment=True,
-        json_schema_serialization_defaults_required=True,
-    )
-
-
-def InputField(
-    # copied from pydantic's Field
-    # TODO: Can we support default_factory?
-    default: Any = _Unset,
-    default_factory: Callable[[], Any] | None = _Unset,
-    title: str | None = _Unset,
-    description: str | None = _Unset,
-    pattern: str | None = _Unset,
-    strict: bool | None = _Unset,
-    gt: float | None = _Unset,
-    ge: float | None = _Unset,
-    lt: float | None = _Unset,
-    le: float | None = _Unset,
-    multiple_of: float | None = _Unset,
-    allow_inf_nan: bool | None = _Unset,
-    max_digits: int | None = _Unset,
-    decimal_places: int | None = _Unset,
-    min_length: int | None = _Unset,
-    max_length: int | None = _Unset,
-    # custom
-    input: Input = Input.Any,
-    ui_type: Optional[UIType] = None,
-    ui_component: Optional[UIComponent] = None,
-    ui_hidden: bool = False,
-    ui_order: Optional[int] = None,
-    ui_choice_labels: Optional[dict[str, str]] = None,
-) -> Any:
-    """
-    Creates an input field for an invocation.
-
-    This is a wrapper for Pydantic's [Field](https://docs.pydantic.dev/latest/api/fields/#pydantic.fields.Field) \
-    that adds a few extra parameters to support graph execution and the node editor UI.
-
-    :param Input input: [Input.Any] The kind of input this field requires. \
-      `Input.Direct` means a value must be provided on instantiation. \
-      `Input.Connection` means the value must be provided by a connection. \
-      `Input.Any` means either will do.
-
-    :param UIType ui_type: [None] Optionally provides an extra type hint for the UI. \
-      In some situations, the field's type is not enough to infer the correct UI type. \
-      For example, model selection fields should render a dropdown UI component to select a model. \
-      Internally, there is no difference between SD-1, SD-2 and SDXL model fields, they all use \
-      `MainModelField`. So to ensure the base-model-specific UI is rendered, you can use \
-      `UIType.SDXLMainModelField` to indicate that the field is an SDXL main model field.
-
-    :param UIComponent ui_component: [None] Optionally specifies a specific component to use in the UI. \
-      The UI will always render a suitable component, but sometimes you want something different than the default. \
-      For example, a `string` field will default to a single-line input, but you may want a multi-line textarea instead. \
-      For this case, you could provide `UIComponent.Textarea`.
-
-    :param bool ui_hidden: [False] Specifies whether or not this field should be hidden in the UI.
-
-    :param int ui_order: [None] Specifies the order in which this field should be rendered in the UI.
-
-    :param dict[str, str] ui_choice_labels: [None] Specifies the labels to use for the choices in an enum field.
-    """
-
-    json_schema_extra_ = InputFieldJSONSchemaExtra(
-        input=input,
-        ui_type=ui_type,
-        ui_component=ui_component,
-        ui_hidden=ui_hidden,
-        ui_order=ui_order,
-        ui_choice_labels=ui_choice_labels,
-        field_kind=FieldKind.Input,
-        orig_required=True,
-    )
-
-    """
-    There is a conflict between the typing of invocation definitions and the typing of an invocation's
-    `invoke()` function.
-
-    On instantiation of a node, the invocation definition is used to create the python class. At this time,
-    any number of fields may be optional, because they may be provided by connections.
-
-    On calling of `invoke()`, however, those fields may be required.
-
-    For example, consider an ResizeImageInvocation with an `image: ImageField` field.
-
-    `image` is required during the call to `invoke()`, but when the python class is instantiated,
-    the field may not be present. This is fine, because that image field will be provided by a
-    connection from an ancestor node, which outputs an image.
-
-    This means we want to type the `image` field as optional for the node class definition, but required
-    for the `invoke()` function.
-
-    If we use `typing.Optional` in the node class definition, the field will be typed as optional in the
-    `invoke()` method, and we'll have to do a lot of runtime checks to ensure the field is present - or
-    any static type analysis tools will complain.
-
-    To get around this, in node class definitions, we type all fields correctly for the `invoke()` function,
-    but secretly make them optional in `InputField()`. We also store the original required bool and/or default
-    value. When we call `invoke()`, we use this stored information to do an additional check on the class.
-    """
-
-    if default_factory is not _Unset and default_factory is not None:
-        default = default_factory()
-        logger.warn('"default_factory" is not supported, calling it now to set "default"')
-
-    # These are the args we may wish pass to the pydantic `Field()` function
-    field_args = {
-        "default": default,
-        "title": title,
-        "description": description,
-        "pattern": pattern,
-        "strict": strict,
-        "gt": gt,
-        "ge": ge,
-        "lt": lt,
-        "le": le,
-        "multiple_of": multiple_of,
-        "allow_inf_nan": allow_inf_nan,
-        "max_digits": max_digits,
-        "decimal_places": decimal_places,
-        "min_length": min_length,
-        "max_length": max_length,
-    }
-
-    # We only want to pass the args that were provided, otherwise the `Field()`` function won't work as expected
-    provided_args = {k: v for (k, v) in field_args.items() if v is not PydanticUndefined}
-
-    # Because we are manually making fields optional, we need to store the original required bool for reference later
-    json_schema_extra_.orig_required = default is PydanticUndefined
-
-    # Make Input.Any and Input.Connection fields optional, providing None as a default if the field doesn't already have one
-    if input is Input.Any or input is Input.Connection:
-        default_ = None if default is PydanticUndefined else default
-        provided_args.update({"default": default_})
-        if default is not PydanticUndefined:
-            # Before invoking, we'll check for the original default value and set it on the field if the field has no value
-            json_schema_extra_.default = default
-            json_schema_extra_.orig_default = default
-    elif default is not PydanticUndefined:
-        default_ = default
-        provided_args.update({"default": default_})
-        json_schema_extra_.orig_default = default_
-
-    return Field(
-        **provided_args,
-        json_schema_extra=json_schema_extra_.model_dump(exclude_none=True),
-    )
-
-
-def OutputField(
-    # copied from pydantic's Field
-    default: Any = _Unset,
-    title: str | None = _Unset,
-    description: str | None = _Unset,
-    pattern: str | None = _Unset,
-    strict: bool | None = _Unset,
-    gt: float | None = _Unset,
-    ge: float | None = _Unset,
-    lt: float | None = _Unset,
-    le: float | None = _Unset,
-    multiple_of: float | None = _Unset,
-    allow_inf_nan: bool | None = _Unset,
-    max_digits: int | None = _Unset,
-    decimal_places: int | None = _Unset,
-    min_length: int | None = _Unset,
-    max_length: int | None = _Unset,
-    # custom
-    ui_type: Optional[UIType] = None,
-    ui_hidden: bool = False,
-    ui_order: Optional[int] = None,
-) -> Any:
-    """
-    Creates an output field for an invocation output.
-
-    This is a wrapper for Pydantic's [Field](https://docs.pydantic.dev/1.10/usage/schema/#field-customization) \
-    that adds a few extra parameters to support graph execution and the node editor UI.
-
-    :param UIType ui_type: [None] Optionally provides an extra type hint for the UI. \
-      In some situations, the field's type is not enough to infer the correct UI type. \
-      For example, model selection fields should render a dropdown UI component to select a model. \
-      Internally, there is no difference between SD-1, SD-2 and SDXL model fields, they all use \
-      `MainModelField`. So to ensure the base-model-specific UI is rendered, you can use \
-      `UIType.SDXLMainModelField` to indicate that the field is an SDXL main model field.
-
-    :param bool ui_hidden: [False] Specifies whether or not this field should be hidden in the UI. \
-
-    :param int ui_order: [None] Specifies the order in which this field should be rendered in the UI. \
-    """
-    return Field(
-        default=default,
-        title=title,
-        description=description,
-        pattern=pattern,
-        strict=strict,
-        gt=gt,
-        ge=ge,
-        lt=lt,
-        le=le,
-        multiple_of=multiple_of,
-        allow_inf_nan=allow_inf_nan,
-        max_digits=max_digits,
-        decimal_places=decimal_places,
-        min_length=min_length,
-        max_length=max_length,
-        json_schema_extra=OutputFieldJSONSchemaExtra(
-            ui_type=ui_type,
-            ui_hidden=ui_hidden,
-            ui_order=ui_order,
-            field_kind=FieldKind.Output,
-        ).model_dump(exclude_none=True),
-    )
+    Special = "special"
 
 
 class UIConfigBase(BaseModel):
@@ -451,40 +86,13 @@ class UIConfigBase(BaseModel):
     version: str = Field(
         description='The node\'s version. Should be a valid semver string e.g. "1.0.0" or "3.8.13".',
     )
-    node_pack: Optional[str] = Field(default=None, description="Whether or not this is a custom node")
+    node_pack: str = Field(description="The node pack that this node belongs to, will be 'invokeai' for built-in nodes")
     classification: Classification = Field(default=Classification.Stable, description="The node's classification")
 
     model_config = ConfigDict(
         validate_assignment=True,
         json_schema_serialization_defaults_required=True,
     )
-
-
-class InvocationContext:
-    """Initialized and provided to on execution of invocations."""
-
-    services: InvocationServices
-    graph_execution_state_id: str
-    queue_id: str
-    queue_item_id: int
-    queue_batch_id: str
-    workflow: Optional[WorkflowWithoutID]
-
-    def __init__(
-        self,
-        services: InvocationServices,
-        queue_id: str,
-        queue_item_id: int,
-        queue_batch_id: str,
-        graph_execution_state_id: str,
-        workflow: Optional[WorkflowWithoutID],
-    ):
-        self.services = services
-        self.graph_execution_state_id = graph_execution_state_id
-        self.queue_id = queue_id
-        self.queue_item_id = queue_item_id
-        self.queue_batch_id = queue_batch_id
-        self.workflow = workflow
 
 
 class BaseInvocationOutput(BaseModel):
@@ -495,11 +103,14 @@ class BaseInvocationOutput(BaseModel):
     """
 
     _output_classes: ClassVar[set[BaseInvocationOutput]] = set()
+    _typeadapter: ClassVar[Optional[TypeAdapter[Any]]] = None
+    _typeadapter_needs_update: ClassVar[bool] = False
 
     @classmethod
     def register_output(cls, output: BaseInvocationOutput) -> None:
         """Registers an invocation output."""
         cls._output_classes.add(output)
+        cls._typeadapter_needs_update = True
 
     @classmethod
     def get_outputs(cls) -> Iterable[BaseInvocationOutput]:
@@ -507,10 +118,15 @@ class BaseInvocationOutput(BaseModel):
         return cls._output_classes
 
     @classmethod
-    def get_outputs_union(cls) -> UnionType:
-        """Gets a union of all invocation outputs."""
-        outputs_union = Union[tuple(cls._output_classes)]  # type: ignore [valid-type]
-        return outputs_union  # type: ignore [return-value]
+    def get_typeadapter(cls) -> TypeAdapter[Any]:
+        """Gets a pydantc TypeAdapter for the union of all invocation output types."""
+        if not cls._typeadapter or cls._typeadapter_needs_update:
+            AnyInvocationOutput = TypeAliasType(
+                "AnyInvocationOutput", Annotated[Union[tuple(cls._output_classes)], Field(discriminator="type")]
+            )
+            cls._typeadapter = TypeAdapter(AnyInvocationOutput)
+            cls._typeadapter_needs_update = False
+        return cls._typeadapter
 
     @classmethod
     def get_output_types(cls) -> Iterable[str]:
@@ -518,12 +134,13 @@ class BaseInvocationOutput(BaseModel):
         return (i.get_type() for i in BaseInvocationOutput.get_outputs())
 
     @staticmethod
-    def json_schema_extra(schema: dict[str, Any], model_class: Type[BaseModel]) -> None:
+    def json_schema_extra(schema: dict[str, Any], model_class: Type[BaseInvocationOutput]) -> None:
         """Adds various UI-facing attributes to the invocation output's OpenAPI schema."""
         # Because we use a pydantic Literal field with default value for the invocation type,
         # it will be typed as optional in the OpenAPI schema. Make it required manually.
         if "required" not in schema or not isinstance(schema["required"], list):
             schema["required"] = []
+        schema["class"] = "output"
         schema["required"].extend(["type"])
 
     @classmethod
@@ -559,6 +176,8 @@ class BaseInvocation(ABC, BaseModel):
     """
 
     _invocation_classes: ClassVar[set[BaseInvocation]] = set()
+    _typeadapter: ClassVar[Optional[TypeAdapter[Any]]] = None
+    _typeadapter_needs_update: ClassVar[bool] = False
 
     @classmethod
     def get_type(cls) -> str:
@@ -569,17 +188,30 @@ class BaseInvocation(ABC, BaseModel):
     def register_invocation(cls, invocation: BaseInvocation) -> None:
         """Registers an invocation."""
         cls._invocation_classes.add(invocation)
+        cls._typeadapter_needs_update = True
 
     @classmethod
-    def get_invocations_union(cls) -> UnionType:
-        """Gets a union of all invocation types."""
-        invocations_union = Union[tuple(cls._invocation_classes)]  # type: ignore [valid-type]
-        return invocations_union  # type: ignore [return-value]
+    def get_typeadapter(cls) -> TypeAdapter[Any]:
+        """Gets a pydantc TypeAdapter for the union of all invocation types."""
+        if not cls._typeadapter or cls._typeadapter_needs_update:
+            AnyInvocation = TypeAliasType(
+                "AnyInvocation", Annotated[Union[tuple(cls.get_invocations())], Field(discriminator="type")]
+            )
+            cls._typeadapter = TypeAdapter(AnyInvocation)
+            cls._typeadapter_needs_update = False
+        return cls._typeadapter
+
+    @classmethod
+    def invalidate_typeadapter(cls) -> None:
+        """Invalidates the typeadapter, forcing it to be rebuilt on next access. If the invocation allowlist or
+        denylist is changed, this should be called to ensure the typeadapter is updated and validation respects
+        the updated allowlist and denylist."""
+        cls._typeadapter_needs_update = True
 
     @classmethod
     def get_invocations(cls) -> Iterable[BaseInvocation]:
         """Gets all invocations, respecting the allowlist and denylist."""
-        app_config = InvokeAIAppConfig.get_config()
+        app_config = get_config()
         allowed_invocations: set[BaseInvocation] = set()
         for sc in cls._invocation_classes:
             invocation_type = sc.get_type()
@@ -609,22 +241,21 @@ class BaseInvocation(ABC, BaseModel):
         return signature(cls.invoke).return_annotation
 
     @staticmethod
-    def json_schema_extra(schema: dict[str, Any], model_class: Type[BaseModel], *args, **kwargs) -> None:
+    def json_schema_extra(schema: dict[str, Any], model_class: Type[BaseInvocation]) -> None:
         """Adds various UI-facing attributes to the invocation's OpenAPI schema."""
-        uiconfig = cast(UIConfigBase | None, getattr(model_class, "UIConfig", None))
-        if uiconfig is not None:
-            if uiconfig.title is not None:
-                schema["title"] = uiconfig.title
-            if uiconfig.tags is not None:
-                schema["tags"] = uiconfig.tags
-            if uiconfig.category is not None:
-                schema["category"] = uiconfig.category
-            if uiconfig.node_pack is not None:
-                schema["node_pack"] = uiconfig.node_pack
-            schema["classification"] = uiconfig.classification
-            schema["version"] = uiconfig.version
+        if title := model_class.UIConfig.title:
+            schema["title"] = title
+        if tags := model_class.UIConfig.tags:
+            schema["tags"] = tags
+        if category := model_class.UIConfig.category:
+            schema["category"] = category
+        if node_pack := model_class.UIConfig.node_pack:
+            schema["node_pack"] = node_pack
+        schema["classification"] = model_class.UIConfig.classification
+        schema["version"] = model_class.UIConfig.version
         if "required" not in schema or not isinstance(schema["required"], list):
             schema["required"] = []
+        schema["class"] = "invocation"
         schema["required"].extend(["type", "id"])
 
     @abstractmethod
@@ -632,7 +263,7 @@ class BaseInvocation(ABC, BaseModel):
         """Invoke with provided context and return outputs."""
         pass
 
-    def invoke_internal(self, context: InvocationContext) -> BaseInvocationOutput:
+    def invoke_internal(self, context: InvocationContext, services: "InvocationServices") -> BaseInvocationOutput:
         """
         Internal invoke method, calls `invoke()` after some prep.
         Handles optional fields that are required to call `invoke()` and invocation cache.
@@ -657,23 +288,23 @@ class BaseInvocation(ABC, BaseModel):
                     raise MissingInputException(self.model_fields["type"].default, field_name)
 
         # skip node cache codepath if it's disabled
-        if context.services.configuration.node_cache_size == 0:
+        if services.configuration.node_cache_size == 0:
             return self.invoke(context)
 
         output: BaseInvocationOutput
         if self.use_cache:
-            key = context.services.invocation_cache.create_key(self)
-            cached_value = context.services.invocation_cache.get(key)
+            key = services.invocation_cache.create_key(self)
+            cached_value = services.invocation_cache.get(key)
             if cached_value is None:
-                context.services.logger.debug(f'Invocation cache miss for type "{self.get_type()}": {self.id}')
+                services.logger.debug(f'Invocation cache miss for type "{self.get_type()}": {self.id}')
                 output = self.invoke(context)
-                context.services.invocation_cache.save(key, output)
+                services.invocation_cache.save(key, output)
                 return output
             else:
-                context.services.logger.debug(f'Invocation cache hit for type "{self.get_type()}": {self.id}')
+                services.logger.debug(f'Invocation cache hit for type "{self.get_type()}": {self.id}')
                 return cached_value
         else:
-            context.services.logger.debug(f'Skipping invocation cache for "{self.get_type()}": {self.id}')
+            services.logger.debug(f'Skipping invocation cache for "{self.get_type()}": {self.id}')
             return self.invoke(context)
 
     id: str = Field(
@@ -692,13 +323,13 @@ class BaseInvocation(ABC, BaseModel):
         json_schema_extra={"field_kind": FieldKind.NodeAttribute},
     )
 
-    UIConfig: ClassVar[Type[UIConfigBase]]
+    UIConfig: ClassVar[UIConfigBase]
 
     model_config = ConfigDict(
         protected_namespaces=(),
         validate_assignment=True,
         json_schema_extra=json_schema_extra,
-        json_schema_serialization_defaults_required=True,
+        json_schema_serialization_defaults_required=False,
         coerce_numbers_to_str=True,
     )
 
@@ -714,9 +345,7 @@ RESERVED_NODE_ATTRIBUTE_FIELD_NAMES = {
     "workflow",
 }
 
-RESERVED_INPUT_FIELD_NAMES = {
-    "metadata",
-}
+RESERVED_INPUT_FIELD_NAMES = {"metadata", "board"}
 
 RESERVED_OUTPUT_FIELD_NAMES = {"type"}
 
@@ -823,30 +452,25 @@ def invocation(
         validate_fields(cls.model_fields, invocation_type)
 
         # Add OpenAPI schema extras
-        uiconfig_name = cls.__qualname__ + ".UIConfig"
-        if not hasattr(cls, "UIConfig") or cls.UIConfig.__qualname__ != uiconfig_name:
-            cls.UIConfig = type(uiconfig_name, (UIConfigBase,), {})
-        cls.UIConfig.title = title
-        cls.UIConfig.tags = tags
-        cls.UIConfig.category = category
-        cls.UIConfig.classification = classification
-
-        # Grab the node pack's name from the module name, if it's a custom node
-        is_custom_node = cls.__module__.rsplit(".", 1)[0] == "invokeai.app.invocations"
-        if is_custom_node:
-            cls.UIConfig.node_pack = cls.__module__.split(".")[0]
-        else:
-            cls.UIConfig.node_pack = None
+        uiconfig: dict[str, Any] = {}
+        uiconfig["title"] = title
+        uiconfig["tags"] = tags
+        uiconfig["category"] = category
+        uiconfig["classification"] = classification
+        # The node pack is the module name - will be "invokeai" for built-in nodes
+        uiconfig["node_pack"] = cls.__module__.split(".")[0]
 
         if version is not None:
             try:
                 semver.Version.parse(version)
             except ValueError as e:
                 raise InvalidVersionError(f'Invalid version string for node "{invocation_type}": "{version}"') from e
-            cls.UIConfig.version = version
+            uiconfig["version"] = version
         else:
             logger.warn(f'No version specified for node "{invocation_type}", using "1.0.0"')
-            cls.UIConfig.version = "1.0.0"
+            uiconfig["version"] = "1.0.0"
+
+        cls.UIConfig = UIConfigBase(**uiconfig)
 
         if use_cache is not None:
             cls.model_fields["use_cache"].default = use_cache
@@ -864,6 +488,26 @@ def invocation(
         invocation_type_field = Field(
             title="type", default=invocation_type, json_schema_extra={"field_kind": FieldKind.NodeAttribute}
         )
+
+        # Validate the `invoke()` method is implemented
+        if "invoke" in cls.__abstractmethods__:
+            raise ValueError(f'Invocation "{invocation_type}" must implement the "invoke" method')
+
+        # And validate that `invoke()` returns a subclass of `BaseInvocationOutput
+        invoke_return_annotation = signature(cls.invoke).return_annotation
+
+        try:
+            # TODO(psyche): If `invoke()` is not defined, `return_annotation` ends up as the string "BaseInvocationOutput"
+            # instead of the class `BaseInvocationOutput`. This may be a pydantic bug: https://github.com/pydantic/pydantic/issues/7978
+            if isinstance(invoke_return_annotation, str):
+                invoke_return_annotation = getattr(sys.modules[cls.__module__], invoke_return_annotation)
+
+            assert invoke_return_annotation is not BaseInvocationOutput
+            assert issubclass(invoke_return_annotation, BaseInvocationOutput)
+        except Exception:
+            raise ValueError(
+                f'Invocation "{invocation_type}" must have a return annotation of a subclass of BaseInvocationOutput (got "{invoke_return_annotation}")'
+            )
 
         docstring = cls.__doc__
         cls = create_model(
@@ -926,37 +570,3 @@ def invocation_output(
         return cls
 
     return wrapper
-
-
-class MetadataField(RootModel):
-    """
-    Pydantic model for metadata with custom root of type dict[str, Any].
-    Metadata is stored without a strict schema.
-    """
-
-    root: dict[str, Any] = Field(description="The metadata")
-
-
-MetadataFieldValidator = TypeAdapter(MetadataField)
-
-
-class WithMetadata(BaseModel):
-    metadata: Optional[MetadataField] = Field(
-        default=None,
-        description=FieldDescriptions.metadata,
-        json_schema_extra=InputFieldJSONSchemaExtra(
-            field_kind=FieldKind.Internal,
-            input=Input.Connection,
-            orig_required=False,
-        ).model_dump(exclude_none=True),
-    )
-
-
-class WithWorkflow:
-    workflow = None
-
-    def __init_subclass__(cls) -> None:
-        logger.warn(
-            f"{cls.__module__.split('.')[0]}.{cls.__name__}: WithWorkflow is deprecated. Use `context.workflow` to access the workflow."
-        )
-        super().__init_subclass__()

@@ -1,12 +1,15 @@
 import { logger } from 'app/logging/logger';
+import { deepClone } from 'common/util/deepClone';
 import { parseify } from 'common/util/serialize';
 import type { NodesState, WorkflowsState } from 'features/nodes/store/types';
 import { isInvocationNode, isNotesNode } from 'features/nodes/types/invocation';
-import type { WorkflowV2 } from 'features/nodes/types/workflow';
-import { zWorkflowV2 } from 'features/nodes/types/workflow';
+import type { WorkflowV3 } from 'features/nodes/types/workflow';
+import { zWorkflowV3 } from 'features/nodes/types/workflow';
 import i18n from 'i18n';
-import { cloneDeep, pick } from 'lodash-es';
+import { pick } from 'lodash-es';
 import { fromZodError } from 'zod-validation-error';
+
+const log = logger('workflows');
 
 export type BuildWorkflowArg = {
   nodes: NodesState['nodes'];
@@ -25,14 +28,15 @@ const workflowKeys = [
   'exposedFields',
   'meta',
   'id',
-] satisfies (keyof WorkflowV2)[];
+  'form',
+] satisfies (keyof WorkflowV3)[];
 
-export type BuildWorkflowFunction = (arg: BuildWorkflowArg) => WorkflowV2;
+type BuildWorkflowFunction = (arg: BuildWorkflowArg) => WorkflowV3;
 
-export const buildWorkflowFast: BuildWorkflowFunction = ({ nodes, edges, workflow }: BuildWorkflowArg): WorkflowV2 => {
-  const clonedWorkflow = pick(cloneDeep(workflow), workflowKeys);
+export const buildWorkflowFast: BuildWorkflowFunction = ({ nodes, edges, workflow }: BuildWorkflowArg): WorkflowV3 => {
+  const clonedWorkflow = pick(deepClone(workflow), workflowKeys);
 
-  const newWorkflow: WorkflowV2 = {
+  const newWorkflow: WorkflowV3 = {
     ...clonedWorkflow,
     nodes: [],
     edges: [],
@@ -43,19 +47,15 @@ export const buildWorkflowFast: BuildWorkflowFunction = ({ nodes, edges, workflo
       newWorkflow.nodes.push({
         id: node.id,
         type: node.type,
-        data: cloneDeep(node.data),
+        data: deepClone(node.data),
         position: { ...node.position },
-        width: node.width,
-        height: node.height,
       });
     } else if (isNotesNode(node) && node.type) {
       newWorkflow.nodes.push({
         id: node.id,
         type: node.type,
-        data: cloneDeep(node.data),
+        data: deepClone(node.data),
         position: { ...node.position },
-        width: node.width,
-        height: node.height,
       });
     }
   });
@@ -69,6 +69,7 @@ export const buildWorkflowFast: BuildWorkflowFunction = ({ nodes, edges, workflo
         target: edge.target,
         sourceHandle: edge.sourceHandle,
         targetHandle: edge.targetHandle,
+        hidden: edge.hidden,
       });
     } else if (edge.type === 'collapsed') {
       newWorkflow.edges.push({
@@ -83,19 +84,19 @@ export const buildWorkflowFast: BuildWorkflowFunction = ({ nodes, edges, workflo
   return newWorkflow;
 };
 
-export const buildWorkflowWithValidation = ({ nodes, edges, workflow }: BuildWorkflowArg): WorkflowV2 | null => {
+export const buildWorkflowWithValidation = ({ nodes, edges, workflow }: BuildWorkflowArg): WorkflowV3 | null => {
   // builds what really, really should be a valid workflow
   const workflowToValidate = buildWorkflowFast({ nodes, edges, workflow });
 
   // but bc we are storing this in the DB, let's be extra sure
-  const result = zWorkflowV2.safeParse(workflowToValidate);
+  const result = zWorkflowV3.safeParse(workflowToValidate);
 
   if (!result.success) {
     const { message } = fromZodError(result.error, {
       prefix: i18n.t('nodes.unableToValidateWorkflow'),
     });
 
-    logger('nodes').warn({ workflow: parseify(workflowToValidate) }, message);
+    log.warn({ workflow: parseify(workflowToValidate) }, message);
     return null;
   }
 

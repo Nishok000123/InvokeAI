@@ -1,23 +1,34 @@
 # Copyright (c) 2023 Kyle Schouviller (https://github.com/kyle0654)
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
-from pydantic import BaseModel, Field
 
-from invokeai.app.shared.fields import FieldDescriptions
-
-from .baseinvocation import (
+from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
     BaseInvocationOutput,
-    Input,
-    InputField,
-    InvocationContext,
-    OutputField,
-    UIComponent,
     invocation,
     invocation_output,
 )
+from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
+from invokeai.app.invocations.fields import (
+    BoundingBoxField,
+    ColorField,
+    ConditioningField,
+    DenoiseMaskField,
+    FieldDescriptions,
+    FluxConditioningField,
+    ImageField,
+    Input,
+    InputField,
+    LatentsField,
+    OutputField,
+    SD3ConditioningField,
+    TensorField,
+    UIComponent,
+)
+from invokeai.app.services.images.images_common import ImageDTO
+from invokeai.app.services.shared.invocation_context import InvocationContext
 
 """
 Primitives: Boolean, Integer, Float, String, Image, Latents, Conditioning, Color
@@ -46,7 +57,7 @@ class BooleanCollectionOutput(BaseInvocationOutput):
 
 
 @invocation(
-    "boolean", title="Boolean Primitive", tags=["primitives", "boolean"], category="primitives", version="1.0.0"
+    "boolean", title="Boolean Primitive", tags=["primitives", "boolean"], category="primitives", version="1.0.1"
 )
 class BooleanInvocation(BaseInvocation):
     """A boolean primitive value"""
@@ -62,7 +73,7 @@ class BooleanInvocation(BaseInvocation):
     title="Boolean Collection Primitive",
     tags=["primitives", "boolean", "collection"],
     category="primitives",
-    version="1.0.1",
+    version="1.0.2",
 )
 class BooleanCollectionInvocation(BaseInvocation):
     """A collection of boolean primitive values"""
@@ -95,7 +106,7 @@ class IntegerCollectionOutput(BaseInvocationOutput):
 
 
 @invocation(
-    "integer", title="Integer Primitive", tags=["primitives", "integer"], category="primitives", version="1.0.0"
+    "integer", title="Integer Primitive", tags=["primitives", "integer"], category="primitives", version="1.0.1"
 )
 class IntegerInvocation(BaseInvocation):
     """An integer primitive value"""
@@ -111,7 +122,7 @@ class IntegerInvocation(BaseInvocation):
     title="Integer Collection Primitive",
     tags=["primitives", "integer", "collection"],
     category="primitives",
-    version="1.0.1",
+    version="1.0.2",
 )
 class IntegerCollectionInvocation(BaseInvocation):
     """A collection of integer primitive values"""
@@ -143,7 +154,7 @@ class FloatCollectionOutput(BaseInvocationOutput):
     )
 
 
-@invocation("float", title="Float Primitive", tags=["primitives", "float"], category="primitives", version="1.0.0")
+@invocation("float", title="Float Primitive", tags=["primitives", "float"], category="primitives", version="1.0.1")
 class FloatInvocation(BaseInvocation):
     """A float primitive value"""
 
@@ -158,7 +169,7 @@ class FloatInvocation(BaseInvocation):
     title="Float Collection Primitive",
     tags=["primitives", "float", "collection"],
     category="primitives",
-    version="1.0.1",
+    version="1.0.2",
 )
 class FloatCollectionInvocation(BaseInvocation):
     """A collection of float primitive values"""
@@ -190,7 +201,7 @@ class StringCollectionOutput(BaseInvocationOutput):
     )
 
 
-@invocation("string", title="String Primitive", tags=["primitives", "string"], category="primitives", version="1.0.0")
+@invocation("string", title="String Primitive", tags=["primitives", "string"], category="primitives", version="1.0.1")
 class StringInvocation(BaseInvocation):
     """A string primitive value"""
 
@@ -205,7 +216,7 @@ class StringInvocation(BaseInvocation):
     title="String Collection Primitive",
     tags=["primitives", "string", "collection"],
     category="primitives",
-    version="1.0.1",
+    version="1.0.2",
 )
 class StringCollectionInvocation(BaseInvocation):
     """A collection of string primitive values"""
@@ -221,18 +232,6 @@ class StringCollectionInvocation(BaseInvocation):
 # region Image
 
 
-class ImageField(BaseModel):
-    """An image primitive field"""
-
-    image_name: str = Field(description="The name of the image")
-
-
-class BoardField(BaseModel):
-    """A board primitive field"""
-
-    board_id: str = Field(description="The id of the board")
-
-
 @invocation_output("image_output")
 class ImageOutput(BaseInvocationOutput):
     """Base class for nodes that output a single image"""
@@ -240,6 +239,14 @@ class ImageOutput(BaseInvocationOutput):
     image: ImageField = OutputField(description="The output image")
     width: int = OutputField(description="The width of the image in pixels")
     height: int = OutputField(description="The height of the image in pixels")
+
+    @classmethod
+    def build(cls, image_dto: ImageDTO) -> "ImageOutput":
+        return cls(
+            image=ImageField(image_name=image_dto.image_name),
+            width=image_dto.width,
+            height=image_dto.height,
+        )
 
 
 @invocation_output("image_collection_output")
@@ -251,16 +258,14 @@ class ImageCollectionOutput(BaseInvocationOutput):
     )
 
 
-@invocation("image", title="Image Primitive", tags=["primitives", "image"], category="primitives", version="1.0.0")
-class ImageInvocation(
-    BaseInvocation,
-):
+@invocation("image", title="Image Primitive", tags=["primitives", "image"], category="primitives", version="1.0.2")
+class ImageInvocation(BaseInvocation):
     """An image primitive value"""
 
     image: ImageField = InputField(description="The image to load")
 
     def invoke(self, context: InvocationContext) -> ImageOutput:
-        image = context.services.images.get_pil_image(self.image.image_name)
+        image = context.images.get_pil(self.image.image_name)
 
         return ImageOutput(
             image=ImageField(image_name=self.image.image_name),
@@ -274,7 +279,7 @@ class ImageInvocation(
     title="Image Collection Primitive",
     tags=["primitives", "image", "collection"],
     category="primitives",
-    version="1.0.0",
+    version="1.0.1",
 )
 class ImageCollectionInvocation(BaseInvocation):
     """A collection of image primitive values"""
@@ -290,18 +295,21 @@ class ImageCollectionInvocation(BaseInvocation):
 # region DenoiseMask
 
 
-class DenoiseMaskField(BaseModel):
-    """An inpaint mask field"""
-
-    mask_name: str = Field(description="The name of the mask image")
-    masked_latents_name: Optional[str] = Field(default=None, description="The name of the masked image latents")
-
-
 @invocation_output("denoise_mask_output")
 class DenoiseMaskOutput(BaseInvocationOutput):
     """Base class for nodes that output a single image"""
 
     denoise_mask: DenoiseMaskField = OutputField(description="Mask for denoise model run")
+
+    @classmethod
+    def build(
+        cls, mask_name: str, masked_latents_name: Optional[str] = None, gradient: bool = False
+    ) -> "DenoiseMaskOutput":
+        return cls(
+            denoise_mask=DenoiseMaskField(
+                mask_name=mask_name, masked_latents_name=masked_latents_name, gradient=gradient
+            ),
+        )
 
 
 # endregion
@@ -309,22 +317,21 @@ class DenoiseMaskOutput(BaseInvocationOutput):
 # region Latents
 
 
-class LatentsField(BaseModel):
-    """A latents tensor primitive field"""
-
-    latents_name: str = Field(description="The name of the latents")
-    seed: Optional[int] = Field(default=None, description="Seed used to generate this latents")
-
-
 @invocation_output("latents_output")
 class LatentsOutput(BaseInvocationOutput):
     """Base class for nodes that output a single latents tensor"""
 
-    latents: LatentsField = OutputField(
-        description=FieldDescriptions.latents,
-    )
+    latents: LatentsField = OutputField(description=FieldDescriptions.latents)
     width: int = OutputField(description=FieldDescriptions.width)
     height: int = OutputField(description=FieldDescriptions.height)
+
+    @classmethod
+    def build(cls, latents_name: str, latents: torch.Tensor, seed: Optional[int] = None) -> "LatentsOutput":
+        return cls(
+            latents=LatentsField(latents_name=latents_name, seed=seed),
+            width=latents.size()[3] * LATENT_SCALE_FACTOR,
+            height=latents.size()[2] * LATENT_SCALE_FACTOR,
+        )
 
 
 @invocation_output("latents_collection_output")
@@ -337,7 +344,7 @@ class LatentsCollectionOutput(BaseInvocationOutput):
 
 
 @invocation(
-    "latents", title="Latents Primitive", tags=["primitives", "latents"], category="primitives", version="1.0.0"
+    "latents", title="Latents Primitive", tags=["primitives", "latents"], category="primitives", version="1.0.2"
 )
 class LatentsInvocation(BaseInvocation):
     """A latents tensor primitive value"""
@@ -345,9 +352,9 @@ class LatentsInvocation(BaseInvocation):
     latents: LatentsField = InputField(description="The latents tensor", input=Input.Connection)
 
     def invoke(self, context: InvocationContext) -> LatentsOutput:
-        latents = context.services.latents.get(self.latents.latents_name)
+        latents = context.tensors.load(self.latents.latents_name)
 
-        return build_latents_output(self.latents.latents_name, latents)
+        return LatentsOutput.build(self.latents.latents_name, latents)
 
 
 @invocation(
@@ -355,7 +362,7 @@ class LatentsInvocation(BaseInvocation):
     title="Latents Collection Primitive",
     tags=["primitives", "latents", "collection"],
     category="primitives",
-    version="1.0.0",
+    version="1.0.1",
 )
 class LatentsCollectionInvocation(BaseInvocation):
     """A collection of latents tensor primitive values"""
@@ -368,29 +375,9 @@ class LatentsCollectionInvocation(BaseInvocation):
         return LatentsCollectionOutput(collection=self.collection)
 
 
-def build_latents_output(latents_name: str, latents: torch.Tensor, seed: Optional[int] = None):
-    return LatentsOutput(
-        latents=LatentsField(latents_name=latents_name, seed=seed),
-        width=latents.size()[3] * 8,
-        height=latents.size()[2] * 8,
-    )
-
-
 # endregion
 
 # region Color
-
-
-class ColorField(BaseModel):
-    """A color primitive field"""
-
-    r: int = Field(ge=0, le=255, description="The red component")
-    g: int = Field(ge=0, le=255, description="The green component")
-    b: int = Field(ge=0, le=255, description="The blue component")
-    a: int = Field(ge=0, le=255, description="The alpha component")
-
-    def tuple(self) -> Tuple[int, int, int, int]:
-        return (self.r, self.g, self.b, self.a)
 
 
 @invocation_output("color_output")
@@ -409,7 +396,7 @@ class ColorCollectionOutput(BaseInvocationOutput):
     )
 
 
-@invocation("color", title="Color Primitive", tags=["primitives", "color"], category="primitives", version="1.0.0")
+@invocation("color", title="Color Primitive", tags=["primitives", "color"], category="primitives", version="1.0.1")
 class ColorInvocation(BaseInvocation):
     """A color primitive value"""
 
@@ -421,13 +408,40 @@ class ColorInvocation(BaseInvocation):
 
 # endregion
 
+
 # region Conditioning
 
 
-class ConditioningField(BaseModel):
-    """A conditioning tensor primitive value"""
+@invocation_output("mask_output")
+class MaskOutput(BaseInvocationOutput):
+    """A torch mask tensor."""
 
-    conditioning_name: str = Field(description="The name of conditioning tensor")
+    # shape: [1, H, W], dtype: bool
+    mask: TensorField = OutputField(description="The mask.")
+    width: int = OutputField(description="The width of the mask in pixels.")
+    height: int = OutputField(description="The height of the mask in pixels.")
+
+
+@invocation_output("flux_conditioning_output")
+class FluxConditioningOutput(BaseInvocationOutput):
+    """Base class for nodes that output a single conditioning tensor"""
+
+    conditioning: FluxConditioningField = OutputField(description=FieldDescriptions.cond)
+
+    @classmethod
+    def build(cls, conditioning_name: str) -> "FluxConditioningOutput":
+        return cls(conditioning=FluxConditioningField(conditioning_name=conditioning_name))
+
+
+@invocation_output("sd3_conditioning_output")
+class SD3ConditioningOutput(BaseInvocationOutput):
+    """Base class for nodes that output a single SD3 conditioning tensor"""
+
+    conditioning: SD3ConditioningField = OutputField(description=FieldDescriptions.cond)
+
+    @classmethod
+    def build(cls, conditioning_name: str) -> "SD3ConditioningOutput":
+        return cls(conditioning=SD3ConditioningField(conditioning_name=conditioning_name))
 
 
 @invocation_output("conditioning_output")
@@ -435,6 +449,10 @@ class ConditioningOutput(BaseInvocationOutput):
     """Base class for nodes that output a single conditioning tensor"""
 
     conditioning: ConditioningField = OutputField(description=FieldDescriptions.cond)
+
+    @classmethod
+    def build(cls, conditioning_name: str) -> "ConditioningOutput":
+        return cls(conditioning=ConditioningField(conditioning_name=conditioning_name))
 
 
 @invocation_output("conditioning_collection_output")
@@ -451,7 +469,7 @@ class ConditioningCollectionOutput(BaseInvocationOutput):
     title="Conditioning Primitive",
     tags=["primitives", "conditioning"],
     category="primitives",
-    version="1.0.0",
+    version="1.0.1",
 )
 class ConditioningInvocation(BaseInvocation):
     """A conditioning tensor primitive value"""
@@ -467,7 +485,7 @@ class ConditioningInvocation(BaseInvocation):
     title="Conditioning Collection Primitive",
     tags=["primitives", "conditioning", "collection"],
     category="primitives",
-    version="1.0.1",
+    version="1.0.2",
 )
 class ConditioningCollectionInvocation(BaseInvocation):
     """A collection of conditioning tensor primitive values"""
@@ -479,6 +497,45 @@ class ConditioningCollectionInvocation(BaseInvocation):
 
     def invoke(self, context: InvocationContext) -> ConditioningCollectionOutput:
         return ConditioningCollectionOutput(collection=self.collection)
+
+
+# endregion
+
+# region BoundingBox
+
+
+@invocation_output("bounding_box_output")
+class BoundingBoxOutput(BaseInvocationOutput):
+    """Base class for nodes that output a single bounding box"""
+
+    bounding_box: BoundingBoxField = OutputField(description="The output bounding box.")
+
+
+@invocation_output("bounding_box_collection_output")
+class BoundingBoxCollectionOutput(BaseInvocationOutput):
+    """Base class for nodes that output a collection of bounding boxes"""
+
+    collection: list[BoundingBoxField] = OutputField(description="The output bounding boxes.", title="Bounding Boxes")
+
+
+@invocation(
+    "bounding_box",
+    title="Bounding Box",
+    tags=["primitives", "segmentation", "collection", "bounding box"],
+    category="primitives",
+    version="1.0.0",
+)
+class BoundingBoxInvocation(BaseInvocation):
+    """Create a bounding box manually by supplying box coordinates"""
+
+    x_min: int = InputField(default=0, description="x-coordinate of the bounding box's top left vertex")
+    y_min: int = InputField(default=0, description="y-coordinate of the bounding box's top left vertex")
+    x_max: int = InputField(default=0, description="x-coordinate of the bounding box's bottom right vertex")
+    y_max: int = InputField(default=0, description="y-coordinate of the bounding box's bottom right vertex")
+
+    def invoke(self, context: InvocationContext) -> BoundingBoxOutput:
+        bounding_box = BoundingBoxField(x_min=self.x_min, y_min=self.y_min, x_max=self.x_max, y_max=self.y_max)
+        return BoundingBoxOutput(bounding_box=bounding_box)
 
 
 # endregion

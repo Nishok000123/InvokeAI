@@ -1,14 +1,14 @@
-import type { ChakraProps } from '@invoke-ai/ui-library';
-import { Box, useGlobalMenuClose, useToken } from '@invoke-ai/ui-library';
-import { createSelector } from '@reduxjs/toolkit';
-import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
-import NodeSelectionOverlay from 'common/components/NodeSelectionOverlay';
+import type { ChakraProps, SystemStyleObject } from '@invoke-ai/ui-library';
+import { Box, useGlobalMenuClose } from '@invoke-ai/ui-library';
+import { useAppSelector } from 'app/store/storeHooks';
 import { useMouseOverNode } from 'features/nodes/hooks/useMouseOverNode';
-import { nodeExclusivelySelected, selectNodesSlice } from 'features/nodes/store/nodesSlice';
-import { DRAG_HANDLE_CLASSNAME, NODE_WIDTH } from 'features/nodes/types/constants';
+import { useNodeExecutionState } from 'features/nodes/hooks/useNodeExecutionState';
+import { useZoomToNode } from 'features/nodes/hooks/useZoomToNode';
+import { selectNodeOpacity } from 'features/nodes/store/workflowSettingsSlice';
+import { DRAG_HANDLE_CLASSNAME, NO_FIT_ON_DOUBLE_CLICK_CLASS, NODE_WIDTH } from 'features/nodes/types/constants';
 import { zNodeStatus } from 'features/nodes/types/invocation';
 import type { MouseEvent, PropsWithChildren } from 'react';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback } from 'react';
 
 type NodeWrapperProps = PropsWithChildren & {
   nodeId: string;
@@ -16,84 +16,118 @@ type NodeWrapperProps = PropsWithChildren & {
   width?: ChakraProps['w'];
 };
 
+// Animations are disabled as a performance optimization - they can cause massive slowdowns in large workflows - even
+// when the animations are GPU-accelerated CSS.
+
+const containerSx: SystemStyleObject = {
+  h: 'full',
+  position: 'relative',
+  borderRadius: 'base',
+  transitionProperty: 'none',
+  cursor: 'grab',
+};
+
+const shadowsSx: SystemStyleObject = {
+  position: 'absolute',
+  top: 0,
+  insetInlineEnd: 0,
+  bottom: 0,
+  insetInlineStart: 0,
+  borderRadius: 'base',
+  pointerEvents: 'none',
+  zIndex: -1,
+  shadow: 'var(--invoke-shadows-xl), var(--invoke-shadows-base), var(--invoke-shadows-base)',
+};
+
+const inProgressSx: SystemStyleObject = {
+  position: 'absolute',
+  top: 0,
+  insetInlineEnd: 0,
+  bottom: 0,
+  insetInlineStart: 0,
+  borderRadius: 'md',
+  pointerEvents: 'none',
+  transitionProperty: 'none',
+  opacity: 0.7,
+  zIndex: -1,
+  visibility: 'hidden',
+  shadow: '0 0 0 2px var(--invoke-colors-yellow-400), 0 0 20px 2px var(--invoke-colors-orange-700)',
+  '&[data-is-in-progress="true"]': {
+    visibility: 'visible',
+  },
+};
+
+const selectionOverlaySx: SystemStyleObject = {
+  position: 'absolute',
+  top: 0,
+  insetInlineEnd: 0,
+  bottom: 0,
+  insetInlineStart: 0,
+  borderRadius: 'base',
+  transitionProperty: 'none',
+  pointerEvents: 'none',
+  visibility: 'hidden',
+  opacity: 0.5,
+  '&[data-is-selected="true"], &[data-is-hovered="true"]': { visibility: 'visible' },
+  '&[data-is-selected="true"]': { shadow: '0 0 0 3px var(--invoke-colors-blue-300)' },
+  '&[data-is-hovered="true"]': { shadow: '0 0 0 2px var(--invoke-colors-blue-300)' },
+  '&[data-is-selected="true"][data-is-hovered="true"]': {
+    opacity: 1,
+    shadow: '0 0 0 3px var(--invoke-colors-blue-300)',
+  },
+};
+
 const NodeWrapper = (props: NodeWrapperProps) => {
   const { nodeId, width, children, selected } = props;
   const { isMouseOverNode, handleMouseOut, handleMouseOver } = useMouseOverNode(nodeId);
+  const zoomToNode = useZoomToNode();
 
-  const selectIsInProgress = useMemo(
-    () =>
-      createSelector(
-        selectNodesSlice,
-        (nodes) => nodes.nodeExecutionStates[nodeId]?.status === zNodeStatus.enum.IN_PROGRESS
-      ),
-    [nodeId]
-  );
+  const executionState = useNodeExecutionState(nodeId);
+  const isInProgress = executionState?.status === zNodeStatus.enum.IN_PROGRESS;
 
-  const isInProgress = useAppSelector(selectIsInProgress);
+  const opacity = useAppSelector(selectNodeOpacity);
+  const globalMenu = useGlobalMenuClose();
 
-  const [nodeInProgress, shadowsXl, shadowsBase] = useToken('shadows', [
-    'nodeInProgress',
-    'shadows.xl',
-    'shadows.base',
-  ]);
-
-  const dispatch = useAppDispatch();
-
-  const opacity = useAppSelector((s) => s.nodes.nodeOpacity);
-  const { onCloseGlobal } = useGlobalMenuClose();
-
-  const handleClick = useCallback(
-    (e: MouseEvent<HTMLDivElement>) => {
-      if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
-        dispatch(nodeExclusivelySelected(nodeId));
+  const onDoubleClick = useCallback(
+    (e: MouseEvent) => {
+      if (!(e.target instanceof HTMLElement)) {
+        // We have to manually narrow the type here thanks to a TS quirk
+        return;
       }
-      onCloseGlobal();
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement ||
+        e.target instanceof HTMLButtonElement ||
+        e.target instanceof HTMLAnchorElement
+      ) {
+        // Don't fit the view if the user is editing a text field, select, button, or link
+        return;
+      }
+      if (e.target.closest(`.${NO_FIT_ON_DOUBLE_CLICK_CLASS}`) !== null) {
+        // This target is marked as not fitting the view on double click
+        return;
+      }
+      zoomToNode(nodeId);
     },
-    [dispatch, onCloseGlobal, nodeId]
+    [nodeId, zoomToNode]
   );
 
   return (
     <Box
-      onClick={handleClick}
+      onClick={globalMenu.onCloseGlobal}
+      onDoubleClick={onDoubleClick}
       onMouseEnter={handleMouseOver}
       onMouseLeave={handleMouseOut}
       className={DRAG_HANDLE_CLASSNAME}
-      h="full"
-      position="relative"
-      borderRadius="base"
-      w={width ? width : NODE_WIDTH}
-      transitionProperty="common"
-      transitionDuration="0.1s"
-      cursor="grab"
+      sx={containerSx}
+      width={width || NODE_WIDTH}
       opacity={opacity}
     >
-      <Box
-        position="absolute"
-        top={0}
-        insetInlineEnd={0}
-        bottom={0}
-        insetInlineStart={0}
-        borderRadius="base"
-        pointerEvents="none"
-        shadow={`${shadowsXl}, ${shadowsBase}, ${shadowsBase}`}
-        zIndex={-1}
-      />
-      <Box
-        position="absolute"
-        top={0}
-        insetInlineEnd={0}
-        bottom={0}
-        insetInlineStart={0}
-        borderRadius="md"
-        pointerEvents="none"
-        transitionProperty="common"
-        transitionDuration="0.1s"
-        opacity={0.7}
-        shadow={isInProgress ? nodeInProgress : undefined}
-        zIndex={-1}
-      />
+      <Box sx={shadowsSx} />
+      <Box sx={inProgressSx} data-is-in-progress={isInProgress} />
       {children}
-      <NodeSelectionOverlay isSelected={selected} isHovered={isMouseOverNode} />
+      <Box sx={selectionOverlaySx} data-is-selected={selected} data-is-hovered={isMouseOverNode} />
     </Box>
   );
 };

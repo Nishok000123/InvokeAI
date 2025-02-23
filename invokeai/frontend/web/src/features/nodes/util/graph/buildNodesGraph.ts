@@ -1,33 +1,11 @@
+import { logger } from 'app/logging/logger';
 import type { NodesState } from 'features/nodes/store/types';
-import type { FieldInputInstance } from 'features/nodes/types/field';
-import { isColorFieldInputInstance } from 'features/nodes/types/field';
-import { isInvocationNode } from 'features/nodes/types/invocation';
-import { cloneDeep, omit, reduce } from 'lodash-es';
-import type { Graph } from 'services/api/types';
-import type { AnyInvocation } from 'services/events/types';
+import { isExecutableNode, isInvocationNode } from 'features/nodes/types/invocation';
+import { omit, reduce } from 'lodash-es';
+import type { AnyInvocation, Graph } from 'services/api/types';
 import { v4 as uuidv4 } from 'uuid';
 
-/**
- * We need to do special handling for some fields
- */
-export const parseFieldValue = (field: FieldInputInstance) => {
-  if (isColorFieldInputInstance(field)) {
-    if (field.value) {
-      const clonedValue = cloneDeep(field.value);
-
-      const { r, g, b, a } = field.value;
-
-      // scale alpha value to PIL's desired range 0-255
-      const scaledAlpha = Math.max(0, Math.min(a * 255, 255));
-      const transformedColor = { r, g, b, a: scaledAlpha };
-
-      Object.assign(clonedValue, transformedColor);
-      return clonedValue;
-    }
-  }
-
-  return field.value;
-};
+const log = logger('workflows');
 
 /**
  * Builds a graph from the node editor state.
@@ -35,7 +13,8 @@ export const parseFieldValue = (field: FieldInputInstance) => {
 export const buildNodesGraph = (nodesState: NodesState): Graph => {
   const { nodes, edges } = nodesState;
 
-  const filteredNodes = nodes.filter(isInvocationNode);
+  // Exclude all batch nodes - we will handle these in the batch setup in a diff function
+  const filteredNodes = nodes.filter(isInvocationNode).filter(isExecutableNode);
 
   // Reduce the node editor nodes into invocation graph nodes
   const parsedNodes = filteredNodes.reduce<NonNullable<Graph['nodes']>>((nodesAccumulator, node) => {
@@ -46,8 +25,7 @@ export const buildNodesGraph = (nodesState: NodesState): Graph => {
     const transformedInputs = reduce(
       inputs,
       (inputsAccumulator, input, name) => {
-        const parsedValue = parseFieldValue(input);
-        inputsAccumulator[name] = parsedValue;
+        inputsAccumulator[name] = input.value;
 
         return inputsAccumulator;
       },
@@ -73,22 +51,31 @@ export const buildNodesGraph = (nodesState: NodesState): Graph => {
     return nodesAccumulator;
   }, {});
 
+  const filteredNodeIds = filteredNodes.map(({ id }) => id);
+
   // skip out the "dummy" edges between collapsed nodes
-  const filteredEdges = edges.filter((n) => n.type !== 'collapsed');
+  const filteredEdges = edges
+    .filter((edge) => edge.type !== 'collapsed')
+    .filter((edge) => filteredNodeIds.includes(edge.source) && filteredNodeIds.includes(edge.target));
 
   // Reduce the node editor edges into invocation graph edges
   const parsedEdges = filteredEdges.reduce<NonNullable<Graph['edges']>>((edgesAccumulator, edge) => {
     const { source, target, sourceHandle, targetHandle } = edge;
 
+    if (!sourceHandle || !targetHandle) {
+      log.warn({ source, target, sourceHandle, targetHandle }, 'Missing source or taget handle for edge');
+      return edgesAccumulator;
+    }
+
     // Format the edges and add to the edges array
     edgesAccumulator.push({
       source: {
         node_id: source,
-        field: sourceHandle as string,
+        field: sourceHandle,
       },
       destination: {
         node_id: target,
-        field: targetHandle as string,
+        field: targetHandle,
       },
     });
 

@@ -5,22 +5,23 @@ from pydantic import BaseModel, ConfigDict, Field
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
     BaseInvocationOutput,
-    InputField,
-    InvocationContext,
-    MetadataField,
-    OutputField,
-    UIType,
+    Classification,
     invocation,
     invocation_output,
 )
-from invokeai.app.invocations.controlnet_image_processors import ControlField
-from invokeai.app.invocations.ip_adapter import IPAdapterModelField
-from invokeai.app.invocations.model import LoRAModelField, MainModelField, VAEModelField
-from invokeai.app.invocations.primitives import ImageField
-from invokeai.app.invocations.t2i_adapter import T2IAdapterField
-from invokeai.app.shared.fields import FieldDescriptions
-
-from ...version import __version__
+from invokeai.app.invocations.fields import (
+    FieldDescriptions,
+    ImageField,
+    InputField,
+    MetadataField,
+    OutputField,
+    UIType,
+)
+from invokeai.app.invocations.model import ModelIdentifierField
+from invokeai.app.invocations.primitives import StringOutput
+from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.app.util.controlnet_utils import CONTROLNET_MODE_VALUES, CONTROLNET_RESIZE_VALUES
+from invokeai.version.invokeai_version import __version__
 
 
 class MetadataItemField(BaseModel):
@@ -31,7 +32,7 @@ class MetadataItemField(BaseModel):
 class LoRAMetadataField(BaseModel):
     """LoRA Metadata Field"""
 
-    lora: LoRAModelField = Field(description=FieldDescriptions.lora_model)
+    model: ModelIdentifierField = Field(description=FieldDescriptions.lora_model)
     weight: float = Field(description=FieldDescriptions.lora_weight)
 
 
@@ -39,14 +40,41 @@ class IPAdapterMetadataField(BaseModel):
     """IP Adapter Field, minus the CLIP Vision Encoder model"""
 
     image: ImageField = Field(description="The IP-Adapter image prompt.")
-    ip_adapter_model: IPAdapterModelField = Field(
-        description="The IP-Adapter model.",
-    )
-    weight: Union[float, list[float]] = Field(
-        description="The weight given to the IP-Adapter",
-    )
+    ip_adapter_model: ModelIdentifierField = Field(description="The IP-Adapter model.")
+    clip_vision_model: Literal["ViT-L", "ViT-H", "ViT-G"] = Field(description="The CLIP Vision model")
+    method: Literal["full", "style", "composition"] = Field(description="Method to apply IP Weights with")
+    weight: Union[float, list[float]] = Field(description="The weight given to the IP-Adapter")
     begin_step_percent: float = Field(description="When the IP-Adapter is first applied (% of total steps)")
     end_step_percent: float = Field(description="When the IP-Adapter is last applied (% of total steps)")
+
+
+class T2IAdapterMetadataField(BaseModel):
+    image: ImageField = Field(description="The control image.")
+    processed_image: Optional[ImageField] = Field(default=None, description="The control image, after processing.")
+    t2i_adapter_model: ModelIdentifierField = Field(description="The T2I-Adapter model to use.")
+    weight: Union[float, list[float]] = Field(default=1, description="The weight given to the T2I-Adapter")
+    begin_step_percent: float = Field(
+        default=0, ge=0, le=1, description="When the T2I-Adapter is first applied (% of total steps)"
+    )
+    end_step_percent: float = Field(
+        default=1, ge=0, le=1, description="When the T2I-Adapter is last applied (% of total steps)"
+    )
+    resize_mode: CONTROLNET_RESIZE_VALUES = Field(default="just_resize", description="The resize mode to use")
+
+
+class ControlNetMetadataField(BaseModel):
+    image: ImageField = Field(description="The control image")
+    processed_image: Optional[ImageField] = Field(default=None, description="The control image, after processing.")
+    control_model: ModelIdentifierField = Field(description="The ControlNet model to use")
+    control_weight: Union[float, list[float]] = Field(default=1, description="The weight given to the ControlNet")
+    begin_step_percent: float = Field(
+        default=0, ge=0, le=1, description="When the ControlNet is first applied (% of total steps)"
+    )
+    end_step_percent: float = Field(
+        default=1, ge=0, le=1, description="When the ControlNet is last applied (% of total steps)"
+    )
+    control_mode: CONTROLNET_MODE_VALUES = Field(default="balanced", description="The control mode to use")
+    resize_mode: CONTROLNET_RESIZE_VALUES = Field(default="just_resize", description="The resize mode to use")
 
 
 @invocation_output("metadata_item_output")
@@ -56,7 +84,7 @@ class MetadataItemOutput(BaseInvocationOutput):
     item: MetadataItemField = OutputField(description="Metadata Item")
 
 
-@invocation("metadata_item", title="Metadata Item", tags=["metadata"], category="metadata", version="1.0.0")
+@invocation("metadata_item", title="Metadata Item", tags=["metadata"], category="metadata", version="1.0.1")
 class MetadataItemInvocation(BaseInvocation):
     """Used to create an arbitrary metadata item. Provide "label" and make a connection to "value" to store that data as the value."""
 
@@ -72,7 +100,7 @@ class MetadataOutput(BaseInvocationOutput):
     metadata: MetadataField = OutputField(description="Metadata Dict")
 
 
-@invocation("metadata", title="Metadata", tags=["metadata"], category="metadata", version="1.0.0")
+@invocation("metadata", title="Metadata", tags=["metadata"], category="metadata", version="1.0.1")
 class MetadataInvocation(BaseInvocation):
     """Takes a MetadataItem or collection of MetadataItems and outputs a MetadataDict."""
 
@@ -93,7 +121,7 @@ class MetadataInvocation(BaseInvocation):
         return MetadataOutput(metadata=MetadataField.model_validate(data))
 
 
-@invocation("merge_metadata", title="Metadata Merge", tags=["metadata"], category="metadata", version="1.0.0")
+@invocation("merge_metadata", title="Metadata Merge", tags=["metadata"], category="metadata", version="1.0.1")
 class MergeMetadataInvocation(BaseInvocation):
     """Merged a collection of MetadataDict into a single MetadataDict."""
 
@@ -108,13 +136,35 @@ class MergeMetadataInvocation(BaseInvocation):
 
 
 GENERATION_MODES = Literal[
-    "txt2img", "img2img", "inpaint", "outpaint", "sdxl_txt2img", "sdxl_img2img", "sdxl_inpaint", "sdxl_outpaint"
+    "txt2img",
+    "img2img",
+    "inpaint",
+    "outpaint",
+    "sdxl_txt2img",
+    "sdxl_img2img",
+    "sdxl_inpaint",
+    "sdxl_outpaint",
+    "flux_txt2img",
+    "flux_img2img",
+    "flux_inpaint",
+    "flux_outpaint",
+    "sd3_txt2img",
+    "sd3_img2img",
+    "sd3_inpaint",
+    "sd3_outpaint",
 ]
 
 
-@invocation("core_metadata", title="Core Metadata", tags=["metadata"], category="metadata", version="1.0.1")
+@invocation(
+    "core_metadata",
+    title="Core Metadata",
+    tags=["metadata"],
+    category="metadata",
+    version="2.0.0",
+    classification=Classification.Internal,
+)
 class CoreMetadataInvocation(BaseInvocation):
-    """Collects core generation metadata into a MetadataField"""
+    """Used internally by Invoke to collect metadata for generations."""
 
     generation_mode: Optional[GENERATION_MODES] = InputField(
         default=None,
@@ -138,14 +188,14 @@ class CoreMetadataInvocation(BaseInvocation):
         default=None,
         description="The number of skipped CLIP layers",
     )
-    model: Optional[MainModelField] = InputField(default=None, description="The main model used for inference")
-    controlnets: Optional[list[ControlField]] = InputField(
+    model: Optional[ModelIdentifierField] = InputField(default=None, description="The main model used for inference")
+    controlnets: Optional[list[ControlNetMetadataField]] = InputField(
         default=None, description="The ControlNets used for inference"
     )
     ipAdapters: Optional[list[IPAdapterMetadataField]] = InputField(
         default=None, description="The IP Adapters used for inference"
     )
-    t2iAdapters: Optional[list[T2IAdapterField]] = InputField(
+    t2iAdapters: Optional[list[T2IAdapterMetadataField]] = InputField(
         default=None, description="The IP Adapters used for inference"
     )
     loras: Optional[list[LoRAMetadataField]] = InputField(default=None, description="The LoRAs used for inference")
@@ -157,7 +207,7 @@ class CoreMetadataInvocation(BaseInvocation):
         default=None,
         description="The name of the initial image",
     )
-    vae: Optional[VAEModelField] = InputField(
+    vae: Optional[ModelIdentifierField] = InputField(
         default=None,
         description="The VAE used for decoding, if the main model's default was not used",
     )
@@ -188,7 +238,7 @@ class CoreMetadataInvocation(BaseInvocation):
     )
 
     # SDXL Refiner
-    refiner_model: Optional[MainModelField] = InputField(
+    refiner_model: Optional[ModelIdentifierField] = InputField(
         default=None,
         description="The SDXL Refiner model used",
     )
@@ -220,10 +270,39 @@ class CoreMetadataInvocation(BaseInvocation):
     def invoke(self, context: InvocationContext) -> MetadataOutput:
         """Collects and outputs a CoreMetadata object"""
 
-        return MetadataOutput(
-            metadata=MetadataField.model_validate(
-                self.model_dump(exclude_none=True, exclude={"id", "type", "is_intermediate", "use_cache"})
-            )
-        )
+        as_dict = self.model_dump(exclude_none=True, exclude={"id", "type", "is_intermediate", "use_cache"})
+        as_dict["app_version"] = __version__
+
+        return MetadataOutput(metadata=MetadataField.model_validate(as_dict))
 
     model_config = ConfigDict(extra="allow")
+
+
+@invocation(
+    "metadata_field_extractor",
+    title="Metadata Field Extractor",
+    tags=["metadata"],
+    category="metadata",
+    version="1.0.0",
+)
+class MetadataFieldExtractorInvocation(BaseInvocation):
+    """Extracts the text value from an image's metadata given a key.
+    Raises an error if the image has no metadata or if the value is not a string (nesting not permitted)."""
+
+    image: ImageField = InputField(description="The image to extract metadata from")
+    key: str = InputField(description="The key in the image's metadata to extract the value from")
+
+    def invoke(self, context: InvocationContext) -> StringOutput:
+        image_name = self.image.image_name
+
+        metadata = context.images.get_metadata(image_name=image_name)
+        if not metadata:
+            raise ValueError(f"No metadata found on image {image_name}")
+
+        try:
+            val = metadata.root[self.key]
+            if not isinstance(val, str):
+                raise ValueError(f"Metadata at key '{self.key}' must be a string")
+            return StringOutput(value=val)
+        except KeyError as e:
+            raise ValueError(f"No key '{self.key}' found in the metadata for {image_name}") from e

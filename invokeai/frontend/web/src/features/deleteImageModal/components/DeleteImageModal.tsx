@@ -1,8 +1,9 @@
 import { ConfirmationAlertDialog, Divider, Flex, FormControl, FormLabel, Switch, Text } from '@invoke-ai/ui-library';
+import { createSelector } from '@reduxjs/toolkit';
 import { createMemoizedSelector } from 'app/store/createMemoizedSelector';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
-import { selectCanvasSlice } from 'features/canvas/store/canvasSlice';
-import { selectControlAdaptersSlice } from 'features/controlAdapters/store/controlAdaptersSlice';
+import { useAssertSingleton } from 'common/hooks/useAssertSingleton';
+import { selectCanvasSlice } from 'features/controlLayers/store/selectors';
 import { imageDeletionConfirmed } from 'features/deleteImageModal/store/actions';
 import { getImageUsage, selectImageUsage } from 'features/deleteImageModal/store/selectors';
 import {
@@ -11,9 +12,9 @@ import {
   selectDeleteImageModalSlice,
 } from 'features/deleteImageModal/store/slice';
 import type { ImageUsage } from 'features/deleteImageModal/store/types';
-import { selectNodesSlice } from 'features/nodes/store/nodesSlice';
-import { selectGenerationSlice } from 'features/parameters/store/generationSlice';
-import { setShouldConfirmOnDelete } from 'features/system/store/systemSlice';
+import { selectNodesSlice } from 'features/nodes/store/selectors';
+import { selectUpscaleSlice } from 'features/parameters/store/upscaleSlice';
+import { selectSystemSlice, setShouldConfirmOnDelete } from 'features/system/store/systemSlice';
 import { some } from 'lodash-es';
 import type { ChangeEvent } from 'react';
 import { memo, useCallback } from 'react';
@@ -22,26 +23,22 @@ import { useTranslation } from 'react-i18next';
 import ImageUsageMessage from './ImageUsageMessage';
 
 const selectImageUsages = createMemoizedSelector(
-  [
-    selectDeleteImageModalSlice,
-    selectGenerationSlice,
-    selectCanvasSlice,
-    selectNodesSlice,
-    selectControlAdaptersSlice,
-    selectImageUsage,
-  ],
-  (deleteImageModal, generation, canvas, nodes, controlAdapters, imagesUsage) => {
+  [selectDeleteImageModalSlice, selectNodesSlice, selectCanvasSlice, selectImageUsage, selectUpscaleSlice],
+  (deleteImageModal, nodes, canvas, imagesUsage, upscale) => {
     const { imagesToDelete } = deleteImageModal;
 
     const allImageUsage = (imagesToDelete ?? []).map(({ image_name }) =>
-      getImageUsage(generation, canvas, nodes, controlAdapters, image_name)
+      getImageUsage(nodes, canvas, upscale, image_name)
     );
 
     const imageUsageSummary: ImageUsage = {
-      isInitialImage: some(allImageUsage, (i) => i.isInitialImage),
-      isCanvasImage: some(allImageUsage, (i) => i.isCanvasImage),
+      isUpscaleImage: some(allImageUsage, (i) => i.isUpscaleImage),
+      isRasterLayerImage: some(allImageUsage, (i) => i.isRasterLayerImage),
+      isInpaintMaskImage: some(allImageUsage, (i) => i.isInpaintMaskImage),
+      isRegionalGuidanceImage: some(allImageUsage, (i) => i.isRegionalGuidanceImage),
       isNodesImage: some(allImageUsage, (i) => i.isNodesImage),
-      isControlImage: some(allImageUsage, (i) => i.isControlImage),
+      isControlLayerImage: some(allImageUsage, (i) => i.isControlLayerImage),
+      isReferenceImage: some(allImageUsage, (i) => i.isReferenceImage),
     };
 
     return {
@@ -52,12 +49,18 @@ const selectImageUsages = createMemoizedSelector(
   }
 );
 
+const selectShouldConfirmOnDelete = createSelector(selectSystemSlice, (system) => system.shouldConfirmOnDelete);
+const selectIsModalOpen = createSelector(
+  selectDeleteImageModalSlice,
+  (deleteImageModal) => deleteImageModal.isModalOpen
+);
+
 const DeleteImageModal = () => {
+  useAssertSingleton('DeleteImageModal');
   const dispatch = useAppDispatch();
   const { t } = useTranslation();
-  const shouldConfirmOnDelete = useAppSelector((s) => s.system.shouldConfirmOnDelete);
-  const canRestoreDeletedImagesFromBin = useAppSelector((s) => s.config.canRestoreDeletedImagesFromBin);
-  const isModalOpen = useAppSelector((s) => s.deleteImageModal.isModalOpen);
+  const shouldConfirmOnDelete = useAppSelector(selectShouldConfirmOnDelete);
+  const isModalOpen = useAppSelector(selectIsModalOpen);
   const { imagesToDelete, imagesUsage, imageUsageSummary } = useAppSelector(selectImageUsages);
 
   const handleChangeShouldConfirmOnDelete = useCallback(
@@ -80,17 +83,18 @@ const DeleteImageModal = () => {
 
   return (
     <ConfirmationAlertDialog
-      title={t('gallery.deleteImage')}
+      title={t('gallery.deleteImage', { count: imagesToDelete.length })}
       isOpen={isModalOpen}
       onClose={handleClose}
-      cancelButtonText={t('boards.cancel')}
-      acceptButtonText={t('controlnet.delete')}
+      cancelButtonText={t('common.cancel')}
+      acceptButtonText={t('common.delete')}
       acceptCallback={handleDelete}
+      useInert={false}
     >
       <Flex direction="column" gap={3}>
         <ImageUsageMessage imageUsage={imageUsageSummary} />
         <Divider />
-        <Text>{canRestoreDeletedImagesFromBin ? t('gallery.deleteImageBin') : t('gallery.deleteImagePermanent')}</Text>
+        <Text>{t('gallery.deleteImagePermanent')}</Text>
         <Text>{t('common.areYouSure')}</Text>
         <FormControl>
           <FormLabel>{t('common.dontAskMeAgain')}</FormLabel>

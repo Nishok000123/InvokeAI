@@ -1,6 +1,7 @@
 """Re-export frequently-used symbols from the Model Manager backend."""
 
-from .config import (
+from invokeai.backend.model_manager.config import (
+    AnyModel,
     AnyModelConfig,
     BaseModelType,
     InvalidModelConfigException,
@@ -12,14 +13,17 @@ from .config import (
     SchedulerPredictionType,
     SubModelType,
 )
-from .probe import ModelProbe
-from .search import ModelSearch
+from invokeai.backend.model_manager.load import LoadedModel
+from invokeai.backend.model_manager.probe import ModelProbe
+from invokeai.backend.model_manager.search import ModelSearch
 
 __all__ = [
+    "AnyModel",
     "AnyModelConfig",
     "BaseModelType",
     "ModelRepoVariant",
     "InvalidModelConfigException",
+    "LoadedModel",
     "ModelConfigFactory",
     "ModelFormat",
     "ModelProbe",

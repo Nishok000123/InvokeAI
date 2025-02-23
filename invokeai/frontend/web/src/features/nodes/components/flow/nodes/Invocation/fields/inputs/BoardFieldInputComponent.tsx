@@ -1,7 +1,8 @@
 import type { ComboboxOnChange, ComboboxOption } from '@invoke-ai/ui-library';
-import { Combobox, FormControl } from '@invoke-ai/ui-library';
+import { Combobox } from '@invoke-ai/ui-library';
 import { useAppDispatch } from 'app/store/storeHooks';
 import { fieldBoardValueChanged } from 'features/nodes/store/nodesSlice';
+import { NO_DRAG_CLASS, NO_WHEEL_CLASS } from 'features/nodes/types/constants';
 import type { BoardFieldInputInstance, BoardFieldInputTemplate } from 'features/nodes/types/field';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,25 +14,28 @@ const BoardFieldInputComponent = (props: FieldComponentProps<BoardFieldInputInst
   const { nodeId, field } = props;
   const dispatch = useAppDispatch();
   const { t } = useTranslation();
-  const { options, hasBoards } = useListAllBoardsQuery(undefined, {
-    selectFromResult: ({ data }) => {
-      const options: ComboboxOption[] = [
-        {
-          label: 'None',
-          value: 'none',
-        },
-      ].concat(
-        (data ?? []).map(({ board_id, board_name }) => ({
-          label: board_name,
-          value: board_id,
-        }))
-      );
-      return {
-        options,
-        hasBoards: options.length > 1,
-      };
-    },
-  });
+  const { options, hasBoards } = useListAllBoardsQuery(
+    { include_archived: true },
+    {
+      selectFromResult: ({ data }) => {
+        const options: ComboboxOption[] = [
+          {
+            label: 'None',
+            value: 'none',
+          },
+        ].concat(
+          (data ?? []).map(({ board_id, board_name }) => ({
+            label: board_name,
+            value: board_id,
+          }))
+        );
+        return {
+          options,
+          hasBoards: options.length > 1,
+        };
+      },
+    }
+  );
 
   const onChange = useCallback<ComboboxOnChange>(
     (v) => {
@@ -54,15 +58,15 @@ const BoardFieldInputComponent = (props: FieldComponentProps<BoardFieldInputInst
   const noOptionsMessage = useCallback(() => t('boards.noMatching'), [t]);
 
   return (
-    <FormControl className="nowheel nodrag" isDisabled={!hasBoards}>
-      <Combobox
-        value={value}
-        options={options}
-        onChange={onChange}
-        placeholder={t('boards.selectBoard')}
-        noOptionsMessage={noOptionsMessage}
-      />
-    </FormControl>
+    <Combobox
+      className={`${NO_WHEEL_CLASS} ${NO_DRAG_CLASS}`}
+      value={value}
+      options={options}
+      onChange={onChange}
+      placeholder={t('boards.selectBoard')}
+      noOptionsMessage={noOptionsMessage}
+      isDisabled={!hasBoards}
+    />
   );
 };
 

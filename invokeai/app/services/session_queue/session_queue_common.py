@@ -3,10 +3,20 @@ import json
 from itertools import chain, product
 from typing import Generator, Iterable, Literal, NamedTuple, Optional, TypeAlias, Union, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 from pydantic_core import to_jsonable_python
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation
+from invokeai.app.invocations.fields import ImageField
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState, NodeNotFoundError
 from invokeai.app.services.workflow_records.workflow_records_common import (
     WorkflowWithoutID,
@@ -42,11 +52,7 @@ class SessionQueueItemNotFoundError(ValueError):
 
 # region Batch
 
-BatchDataType = Union[
-    StrictStr,
-    float,
-    int,
-]
+BatchDataType = Union[StrictStr, float, int, ImageField]
 
 
 class NodeFieldValue(BaseModel):
@@ -68,6 +74,14 @@ BatchDataCollection: TypeAlias = list[list[BatchDatum]]
 
 class Batch(BaseModel):
     batch_id: str = Field(default_factory=uuid_string, description="The ID of the batch")
+    origin: str | None = Field(
+        default=None,
+        description="The origin of this queue item. This data is used by the frontend to determine how to handle results.",
+    )
+    destination: str | None = Field(
+        default=None,
+        description="The origin of this queue item. This data is used by the frontend to determine how to handle results",
+    )
     data: Optional[BatchDataCollection] = Field(default=None, description="The batch data collection.")
     graph: Graph = Field(description="The graph to initialize the session with")
     workflow: Optional[WorkflowWithoutID] = Field(
@@ -94,8 +108,16 @@ class Batch(BaseModel):
             return v
         for batch_data_list in v:
             for datum in batch_data_list:
+                if not datum.items:
+                    continue
+
+                # Special handling for numbers - they can be mixed
+                # TODO(psyche): Update BatchDatum to have a `type` field to specify the type of the items, then we can have strict float and int fields
+                if all(isinstance(item, (int, float)) for item in datum.items):
+                    continue
+
                 # Get the type of the first item in the list
-                first_item_type = type(datum.items[0]) if datum.items else None
+                first_item_type = type(datum.items[0])
                 for item in datum.items:
                     if type(item) is not first_item_type:
                         raise BatchItemsTypeError("All items in a batch must have the same type")
@@ -186,10 +208,24 @@ class SessionQueueItemWithoutGraph(BaseModel):
     status: QUEUE_ITEM_STATUS = Field(default="pending", description="The status of this queue item")
     priority: int = Field(default=0, description="The priority of this queue item")
     batch_id: str = Field(description="The ID of the batch associated with this queue item")
+    origin: str | None = Field(
+        default=None,
+        description="The origin of this queue item. This data is used by the frontend to determine how to handle results.",
+    )
+    destination: str | None = Field(
+        default=None,
+        description="The origin of this queue item. This data is used by the frontend to determine how to handle results",
+    )
     session_id: str = Field(
         description="The ID of the session associated with this queue item. The session doesn't exist in graph_executions until the queue item is executed."
     )
-    error: Optional[str] = Field(default=None, description="The error message if this queue item errored")
+    error_type: Optional[str] = Field(default=None, description="The error type if this queue item errored")
+    error_message: Optional[str] = Field(default=None, description="The error message if this queue item errored")
+    error_traceback: Optional[str] = Field(
+        default=None,
+        description="The error traceback if this queue item errored",
+        validation_alias=AliasChoices("error_traceback", "error"),
+    )
     created_at: Union[datetime.datetime, str] = Field(description="When this queue item was created")
     updated_at: Union[datetime.datetime, str] = Field(description="When this queue item was updated")
     started_at: Optional[Union[datetime.datetime, str]] = Field(description="When this queue item was started")
@@ -197,6 +233,9 @@ class SessionQueueItemWithoutGraph(BaseModel):
     queue_id: str = Field(description="The id of the queue with which this item is associated")
     field_values: Optional[list[NodeFieldValue]] = Field(
         default=None, description="The field values that were used for this queue item"
+    )
+    retried_from_item_id: Optional[int] = Field(
+        default=None, description="The item_id of the queue item that this item was retried from"
     )
 
     @classmethod
@@ -276,9 +315,22 @@ class SessionQueueStatus(BaseModel):
     total: int = Field(..., description="Total number of queue items")
 
 
+class SessionQueueCountsByDestination(BaseModel):
+    queue_id: str = Field(..., description="The ID of the queue")
+    destination: str = Field(..., description="The destination of queue items included in this status")
+    pending: int = Field(..., description="Number of queue items with status 'pending' for the destination")
+    in_progress: int = Field(..., description="Number of queue items with status 'in_progress' for the destination")
+    completed: int = Field(..., description="Number of queue items with status 'complete' for the destination")
+    failed: int = Field(..., description="Number of queue items with status 'error' for the destination")
+    canceled: int = Field(..., description="Number of queue items with status 'canceled' for the destination")
+    total: int = Field(..., description="Total number of queue items for the destination")
+
+
 class BatchStatus(BaseModel):
     queue_id: str = Field(..., description="The ID of the queue")
     batch_id: str = Field(..., description="The ID of the batch")
+    origin: str | None = Field(..., description="The origin of the batch")
+    destination: str | None = Field(..., description="The destination of the batch")
     pending: int = Field(..., description="Number of queue items with status 'pending'")
     in_progress: int = Field(..., description="Number of queue items with status 'in_progress'")
     completed: int = Field(..., description="Number of queue items with status 'complete'")
@@ -293,6 +345,11 @@ class EnqueueBatchResult(BaseModel):
     requested: int = Field(description="The total number of queue items requested to be enqueued")
     batch: Batch = Field(description="The batch that was enqueued")
     priority: int = Field(description="The priority of the enqueued batch")
+
+
+class RetryItemsResult(BaseModel):
+    queue_id: str = Field(description="The ID of the queue")
+    retried_item_ids: list[int] = Field(description="The IDs of the queue items that were retried")
 
 
 class ClearResult(BaseModel):
@@ -313,8 +370,20 @@ class CancelByBatchIDsResult(BaseModel):
     canceled: int = Field(..., description="Number of queue items canceled")
 
 
+class CancelByDestinationResult(CancelByBatchIDsResult):
+    """Result of canceling by a destination"""
+
+    pass
+
+
 class CancelByQueueIDResult(CancelByBatchIDsResult):
     """Result of canceling by queue id"""
+
+    pass
+
+
+class CancelAllExceptCurrentResult(CancelByBatchIDsResult):
+    """Result of canceling all except current"""
 
     pass
 
@@ -418,6 +487,9 @@ class SessionQueueValueToInsert(NamedTuple):
     field_values: Optional[str]  # field_values json
     priority: int  # priority
     workflow: Optional[str]  # workflow json
+    origin: str | None
+    destination: str | None
+    retried_from_item_id: int | None = None
 
 
 ValuesToInsert: TypeAlias = list[SessionQueueValueToInsert]
@@ -430,14 +502,16 @@ def prepare_values_to_insert(queue_id: str, batch: Batch, priority: int, max_new
         session.id = uuid_string()
         values_to_insert.append(
             SessionQueueValueToInsert(
-                queue_id,  # queue_id
-                session.model_dump_json(warnings=False, exclude_none=True),  # session (json)
-                session.id,  # session_id
-                batch.batch_id,  # batch_id
+                queue_id=queue_id,
+                session=session.model_dump_json(warnings=False, exclude_none=True),  # as json
+                session_id=session.id,
+                batch_id=batch.batch_id,
                 # must use pydantic_encoder bc field_values is a list of models
-                json.dumps(field_values, default=to_jsonable_python) if field_values else None,  # field_values (json)
-                priority,  # priority
-                json.dumps(workflow, default=to_jsonable_python) if workflow else None,  # workflow (json)
+                field_values=json.dumps(field_values, default=to_jsonable_python) if field_values else None,  # as json
+                priority=priority,
+                workflow=json.dumps(workflow, default=to_jsonable_python) if workflow else None,  # as json
+                origin=batch.origin,
+                destination=batch.destination,
             )
         )
     return values_to_insert

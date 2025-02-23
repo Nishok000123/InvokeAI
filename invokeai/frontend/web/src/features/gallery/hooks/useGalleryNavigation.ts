@@ -1,17 +1,18 @@
+import { useAltModifier } from '@invoke-ai/ui-library';
+import { createSelector } from '@reduxjs/toolkit';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
+import { GALLERY_GRID_CLASS_NAME } from 'features/gallery/components/ImageGrid/constants';
+import { GALLERY_IMAGE_CONTAINER_CLASS_NAME } from 'features/gallery/components/ImageGrid/GalleryImage';
 import { getGalleryImageDataTestId } from 'features/gallery/components/ImageGrid/getGalleryImageDataTestId';
-import { imageItemContainerTestId } from 'features/gallery/components/ImageGrid/ImageGridItemContainer';
-import { imageListContainerTestId } from 'features/gallery/components/ImageGrid/ImageGridListContainer';
 import { virtuosoGridRefs } from 'features/gallery/components/ImageGrid/types';
 import { useGalleryImages } from 'features/gallery/hooks/useGalleryImages';
-import { selectLastSelectedImage } from 'features/gallery/store/gallerySelectors';
-import { imageSelected } from 'features/gallery/store/gallerySlice';
+import { selectImageToCompare, selectLastSelectedImage } from 'features/gallery/store/gallerySelectors';
+import { imageSelected, imageToCompareChanged } from 'features/gallery/store/gallerySlice';
 import { getIsVisible } from 'features/gallery/util/getIsVisible';
 import { getScrollToIndexAlign } from 'features/gallery/util/getScrollToIndexAlign';
 import { clamp } from 'lodash-es';
 import { useCallback, useMemo } from 'react';
 import type { ImageDTO } from 'services/api/types';
-import { imagesSelectors } from 'services/api/util';
 
 /**
  * This hook is used to navigate the gallery using the arrow keys.
@@ -28,13 +29,41 @@ import { imagesSelectors } from 'services/api/util';
  * Gets the number of images per row in the gallery by grabbing their DOM elements.
  */
 const getImagesPerRow = (): number => {
-  const widthOfGalleryImage =
-    document.querySelector(`[data-testid="${imageItemContainerTestId}"]`)?.getBoundingClientRect().width ?? 1;
+  const imageEl = document.querySelector(`.${GALLERY_IMAGE_CONTAINER_CLASS_NAME}`);
+  const gridEl = document.querySelector(`.${GALLERY_GRID_CLASS_NAME}`);
 
-  const widthOfGalleryGrid =
-    document.querySelector(`[data-testid="${imageListContainerTestId}"]`)?.getBoundingClientRect().width ?? 0;
+  if (!imageEl || !gridEl) {
+    return 0;
+  }
+  const container = gridEl.parentElement;
+  if (!container) {
+    return 0;
+  }
 
-  const imagesPerRow = Math.round(widthOfGalleryGrid / widthOfGalleryImage);
+  const imageRect = imageEl.getBoundingClientRect();
+  const containerRect = container.getBoundingClientRect();
+
+  // We need to account for the gap between images
+  const gridElStyle = window.getComputedStyle(gridEl);
+  const gap = parseFloat(gridElStyle.gap);
+
+  if (!imageRect.width || !imageRect.height || !containerRect.width || !containerRect.height) {
+    // Gallery is too small to fit images or not rendered yet
+    return 0;
+  }
+
+  let imagesPerRow = 0;
+  let spaceUsed = 0;
+
+  // Floating point precision can cause imagesPerRow to be 1 too small. Adding 1px to the container size fixes
+  // this, without the possibility of accidentally adding an extra column.
+  while (spaceUsed + imageRect.width <= containerRect.width + 1) {
+    imagesPerRow++; // Increment the number of images
+    spaceUsed += imageRect.width; // Add image size to the used space
+    if (spaceUsed + gap <= containerRect.width) {
+      spaceUsed += gap; // Add gap size to the used space after each image except after the last image
+    }
+  }
 
   return imagesPerRow;
 };
@@ -105,49 +134,66 @@ const getImageFuncs = {
   down: getDownImage,
 };
 
-export type UseGalleryNavigationReturn = {
-  handleLeftImage: () => void;
-  handleRightImage: () => void;
-  handleUpImage: () => void;
-  handleDownImage: () => void;
+type UseGalleryNavigationReturn = {
+  handleLeftImage: (alt?: boolean) => void;
+  handleRightImage: (alt?: boolean) => void;
+  handleUpImage: (alt?: boolean) => void;
+  handleDownImage: (alt?: boolean) => void;
+  prevImage: () => void;
+  nextImage: () => void;
   isOnFirstImage: boolean;
   isOnLastImage: boolean;
-  areImagesBelowCurrent: boolean;
+  isOnFirstRow: boolean;
+  isOnLastRow: boolean;
+  isOnFirstImageOfView: boolean;
+  isOnLastImageOfView: boolean;
 };
 
 /**
  * Provides access to the gallery navigation via arrow keys.
  * Also provides information about the current image's position in the gallery,
- * useful for determining whether to load more images or display navigatin
+ * useful for determining whether to load more images or display navigation
  * buttons.
  */
 export const useGalleryNavigation = (): UseGalleryNavigationReturn => {
   const dispatch = useAppDispatch();
-  const lastSelectedImage = useAppSelector(selectLastSelectedImage);
-  const {
-    queryResult: { data },
-  } = useGalleryImages();
-  const loadedImagesCount = useMemo(() => data?.ids.length ?? 0, [data?.ids.length]);
+  const alt = useAltModifier();
+  const selectImage = useMemo(
+    () =>
+      createSelector(selectLastSelectedImage, selectImageToCompare, (lastSelectedImage, imageToCompare) => {
+        if (alt) {
+          return imageToCompare ?? lastSelectedImage;
+        } else {
+          return lastSelectedImage;
+        }
+      }),
+    [alt]
+  );
+  const lastSelectedImage = useAppSelector(selectImage);
+  const { imageDTOs } = useGalleryImages();
+  const loadedImagesCount = useMemo(() => imageDTOs.length, [imageDTOs.length]);
+
   const lastSelectedImageIndex = useMemo(() => {
-    if (!data || !lastSelectedImage) {
+    if (imageDTOs.length === 0 || !lastSelectedImage) {
       return 0;
     }
-    return imagesSelectors.selectAll(data).findIndex((i) => i.image_name === lastSelectedImage.image_name);
-  }, [lastSelectedImage, data]);
+    return imageDTOs.findIndex((i) => i.image_name === lastSelectedImage.image_name);
+  }, [imageDTOs, lastSelectedImage]);
 
   const handleNavigation = useCallback(
-    (direction: 'left' | 'right' | 'up' | 'down') => {
-      if (!data) {
-        return;
-      }
-      const { index, image } = getImageFuncs[direction](imagesSelectors.selectAll(data), lastSelectedImageIndex);
+    (direction: 'left' | 'right' | 'up' | 'down', alt?: boolean) => {
+      const { index, image } = getImageFuncs[direction](imageDTOs, lastSelectedImageIndex);
       if (!image || index === lastSelectedImageIndex) {
         return;
       }
-      dispatch(imageSelected(image));
+      if (alt) {
+        dispatch(imageToCompareChanged(image));
+      } else {
+        dispatch(imageSelected(image));
+      }
       scrollToImage(image.image_name, index);
     },
-    [dispatch, lastSelectedImageIndex, data]
+    [imageDTOs, lastSelectedImageIndex, dispatch]
   );
 
   const isOnFirstImage = useMemo(() => lastSelectedImageIndex === 0, [lastSelectedImageIndex]);
@@ -157,26 +203,55 @@ export const useGalleryNavigation = (): UseGalleryNavigationReturn => {
     [lastSelectedImageIndex, loadedImagesCount]
   );
 
-  const areImagesBelowCurrent = useMemo(() => {
-    const imagesPerRow = getImagesPerRow();
-    return lastSelectedImageIndex + imagesPerRow < loadedImagesCount;
+  const isOnFirstRow = useMemo(() => lastSelectedImageIndex < getImagesPerRow(), [lastSelectedImageIndex]);
+  const isOnLastRow = useMemo(
+    () => lastSelectedImageIndex >= loadedImagesCount - getImagesPerRow(),
+    [lastSelectedImageIndex, loadedImagesCount]
+  );
+
+  const isOnFirstImageOfView = useMemo(() => {
+    return lastSelectedImageIndex === 0;
+  }, [lastSelectedImageIndex]);
+
+  const isOnLastImageOfView = useMemo(() => {
+    return lastSelectedImageIndex === loadedImagesCount - 1;
   }, [lastSelectedImageIndex, loadedImagesCount]);
 
-  const handleLeftImage = useCallback(() => {
-    handleNavigation('left');
-  }, [handleNavigation]);
+  const handleLeftImage = useCallback(
+    (alt?: boolean) => {
+      handleNavigation('left', alt);
+    },
+    [handleNavigation]
+  );
 
-  const handleRightImage = useCallback(() => {
-    handleNavigation('right');
-  }, [handleNavigation]);
+  const handleRightImage = useCallback(
+    (alt?: boolean) => {
+      handleNavigation('right', alt);
+    },
+    [handleNavigation]
+  );
 
-  const handleUpImage = useCallback(() => {
-    handleNavigation('up');
-  }, [handleNavigation]);
+  const handleUpImage = useCallback(
+    (alt?: boolean) => {
+      handleNavigation('up', alt);
+    },
+    [handleNavigation]
+  );
 
-  const handleDownImage = useCallback(() => {
-    handleNavigation('down');
-  }, [handleNavigation]);
+  const handleDownImage = useCallback(
+    (alt?: boolean) => {
+      handleNavigation('down', alt);
+    },
+    [handleNavigation]
+  );
+
+  const nextImage = useCallback(() => {
+    handleRightImage();
+  }, [handleRightImage]);
+
+  const prevImage = useCallback(() => {
+    handleLeftImage();
+  }, [handleLeftImage]);
 
   return {
     handleLeftImage,
@@ -185,6 +260,11 @@ export const useGalleryNavigation = (): UseGalleryNavigationReturn => {
     handleDownImage,
     isOnFirstImage,
     isOnLastImage,
-    areImagesBelowCurrent,
+    isOnFirstRow,
+    isOnLastRow,
+    nextImage,
+    prevImage,
+    isOnFirstImageOfView,
+    isOnLastImageOfView,
   };
 };

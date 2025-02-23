@@ -19,6 +19,8 @@ their descriptions.
 | Conditioning Primitive                                        | A conditioning tensor primitive value                                                                                                                |
 | Content Shuffle Processor                                     | Applies content shuffle processing to image                                                                                                          |
 | ControlNet                                                    | Collects ControlNet info to pass to other nodes                                                                                                      |
+| Create Denoise Mask                                           | Converts a greyscale or transparency image into a mask for denoising.                                                                                |
+| Create Gradient Mask                                          | Creates a mask for Gradient ("soft", "differential") inpainting that gradually expands during denoising. Improves edge coherence.                    |
 | Denoise Latents                                               | Denoises noisy latents to decodable images                                                                                                           |
 | Divide Integers                                               | Divides two numbers                                                                                                                                  |
 | Dynamic Prompt                                                | Parses a prompt using adieyal/dynamicprompts' random or combinatorial generator                                                                      |
@@ -81,7 +83,7 @@ their descriptions.
 | ONNX Text to Latents                                          | Generates latents from conditionings.                                                                                                                |
 | ONNX Model Loader                                             | Loads a main model, outputting its submodels.                                                                                                        |
 | OpenCV Inpaint                                                | Simple inpaint using opencv.                                                                                                                         |
-| Openpose Processor                                            | Applies Openpose processing to image                                                                                                                 |
+| DW Openpose Processor                                            | Applies Openpose processing to image                                                                                                                 |
 | PIDI Processor                                                | Applies PIDI processing to image                                                                                                                     |
 | Prompts from File                                             | Loads prompts from a text file                                                                                                                       |
 | Random Integer                                                | Outputs a single random integer.                                                                                                                     |
@@ -97,7 +99,6 @@ their descriptions.
 | Scale Latents                                                 | Scales latents by a given factor.                                                                                                                    |
 | Segment Anything Processor                                    | Applies segment anything processing to image                                                                                                         |
 | Show Image                                                    | Displays a provided image, and passes it forward in the pipeline.                                                                                    |
-| Step Param Easing                                             | Experimental per-step parameter easing for denoising steps                                                                                           |
 | String Primitive Collection                                   | A collection of string primitive values                                                                                                              |
 | String Primitive                                              | A string primitive value                                                                                                                             |
 | Subtract Integers                                             | Subtracts two numbers                                                                                                                                |

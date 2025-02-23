@@ -41,3 +41,7 @@ stats.html
 # Yalc
 .yalc
 yalc.lock
+
+# vitest
+tsconfig.vitest-temp.json
+coverage/

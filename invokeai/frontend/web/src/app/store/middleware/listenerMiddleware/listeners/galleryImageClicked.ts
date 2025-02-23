@@ -1,17 +1,16 @@
 import { createAction } from '@reduxjs/toolkit';
+import type { AppStartListening } from 'app/store/middleware/listenerMiddleware';
 import { selectListImagesQueryArgs } from 'features/gallery/store/gallerySelectors';
-import { selectionChanged } from 'features/gallery/store/gallerySlice';
+import { imageToCompareChanged, selectionChanged } from 'features/gallery/store/gallerySlice';
 import { imagesApi } from 'services/api/endpoints/images';
 import type { ImageDTO } from 'services/api/types';
-import { imagesSelectors } from 'services/api/util';
-
-import { startAppListening } from '..';
 
 export const galleryImageClicked = createAction<{
   imageDTO: ImageDTO;
   shiftKey: boolean;
   ctrlKey: boolean;
   metaKey: boolean;
+  altKey: boolean;
 }>('gallery/imageClicked');
 
 /**
@@ -25,24 +24,30 @@ export const galleryImageClicked = createAction<{
  * is much more responsive.
  */
 
-export const addGalleryImageClickedListener = () => {
+export const addGalleryImageClickedListener = (startAppListening: AppStartListening) => {
   startAppListening({
     actionCreator: galleryImageClicked,
-    effect: async (action, { dispatch, getState }) => {
-      const { imageDTO, shiftKey, ctrlKey, metaKey } = action.payload;
+    effect: (action, { dispatch, getState }) => {
+      const { imageDTO, shiftKey, ctrlKey, metaKey, altKey } = action.payload;
       const state = getState();
       const queryArgs = selectListImagesQueryArgs(state);
-      const { data: listImagesData } = imagesApi.endpoints.listImages.select(queryArgs)(state);
+      const queryResult = imagesApi.endpoints.listImages.select(queryArgs)(state);
 
-      if (!listImagesData) {
+      if (!queryResult.data) {
         // Should never happen if we have clicked a gallery image
         return;
       }
 
-      const imageDTOs = imagesSelectors.selectAll(listImagesData);
+      const imageDTOs = queryResult.data.items;
       const selection = state.gallery.selection;
 
-      if (shiftKey) {
+      if (altKey) {
+        if (state.gallery.imageToCompare?.image_name === imageDTO.image_name) {
+          dispatch(imageToCompareChanged(null));
+        } else {
+          dispatch(imageToCompareChanged(imageDTO));
+        }
+      } else if (shiftKey) {
         const rangeEndImageName = imageDTO.image_name;
         const lastSelectedImage = selection[selection.length - 1]?.image_name;
         const lastClickedIndex = imageDTOs.findIndex((n) => n.image_name === lastSelectedImage);

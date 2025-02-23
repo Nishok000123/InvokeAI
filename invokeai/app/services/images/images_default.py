@@ -2,17 +2,13 @@ from typing import Optional
 
 from PIL.Image import Image as PILImageType
 
-from invokeai.app.invocations.baseinvocation import MetadataField
-from invokeai.app.services.invoker import Invoker
-from invokeai.app.services.shared.pagination import OffsetPaginatedResults
-from invokeai.app.services.workflow_records.workflow_records_common import WorkflowWithoutID
-
-from ..image_files.image_files_common import (
+from invokeai.app.invocations.fields import MetadataField
+from invokeai.app.services.image_files.image_files_common import (
     ImageFileDeleteException,
     ImageFileNotFoundException,
     ImageFileSaveException,
 )
-from ..image_records.image_records_common import (
+from invokeai.app.services.image_records.image_records_common import (
     ImageCategory,
     ImageRecord,
     ImageRecordChanges,
@@ -23,8 +19,11 @@ from ..image_records.image_records_common import (
     InvalidOriginException,
     ResourceOrigin,
 )
-from .images_base import ImageServiceABC
-from .images_common import ImageDTO, image_record_to_dto
+from invokeai.app.services.images.images_base import ImageServiceABC
+from invokeai.app.services.images.images_common import ImageDTO, image_record_to_dto
+from invokeai.app.services.invoker import Invoker
+from invokeai.app.services.shared.pagination import OffsetPaginatedResults
+from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 
 
 class ImageService(ImageServiceABC):
@@ -42,8 +41,9 @@ class ImageService(ImageServiceABC):
         session_id: Optional[str] = None,
         board_id: Optional[str] = None,
         is_intermediate: Optional[bool] = False,
-        metadata: Optional[MetadataField] = None,
-        workflow: Optional[WorkflowWithoutID] = None,
+        metadata: Optional[str] = None,
+        workflow: Optional[str] = None,
+        graph: Optional[str] = None,
     ) -> ImageDTO:
         if image_origin not in ResourceOrigin:
             raise InvalidOriginException
@@ -64,7 +64,7 @@ class ImageService(ImageServiceABC):
                 image_category=image_category,
                 width=width,
                 height=height,
-                has_workflow=workflow is not None,
+                has_workflow=workflow is not None or graph is not None,
                 # Meta fields
                 is_intermediate=is_intermediate,
                 # Nullable fields
@@ -73,9 +73,14 @@ class ImageService(ImageServiceABC):
                 session_id=session_id,
             )
             if board_id is not None:
-                self.__invoker.services.board_image_records.add_image_to_board(board_id=board_id, image_name=image_name)
+                try:
+                    self.__invoker.services.board_image_records.add_image_to_board(
+                        board_id=board_id, image_name=image_name
+                    )
+                except Exception as e:
+                    self.__invoker.services.logger.warn(f"Failed to add image to board {board_id}: {str(e)}")
             self.__invoker.services.image_files.save(
-                image_name=image_name, image=image, metadata=metadata, workflow=workflow
+                image_name=image_name, image=image, metadata=metadata, workflow=workflow, graph=graph
             )
             image_dto = self.get_dto(image_name)
 
@@ -154,10 +159,10 @@ class ImageService(ImageServiceABC):
             self.__invoker.services.logger.error("Image record not found")
             raise
         except Exception as e:
-            self.__invoker.services.logger.error("Problem getting image DTO")
+            self.__invoker.services.logger.error("Problem getting image metadata")
             raise e
 
-    def get_workflow(self, image_name: str) -> Optional[WorkflowWithoutID]:
+    def get_workflow(self, image_name: str) -> Optional[str]:
         try:
             return self.__invoker.services.image_files.get_workflow(image_name)
         except ImageFileNotFoundException:
@@ -165,6 +170,16 @@ class ImageService(ImageServiceABC):
             raise
         except Exception:
             self.__invoker.services.logger.error("Problem getting image workflow")
+            raise
+
+    def get_graph(self, image_name: str) -> Optional[str]:
+        try:
+            return self.__invoker.services.image_files.get_graph(image_name)
+        except ImageFileNotFoundException:
+            self.__invoker.services.logger.error("Image file not found")
+            raise
+        except Exception:
+            self.__invoker.services.logger.error("Problem getting image graph")
             raise
 
     def get_path(self, image_name: str, thumbnail: bool = False) -> str:
@@ -192,19 +207,25 @@ class ImageService(ImageServiceABC):
         self,
         offset: int = 0,
         limit: int = 10,
+        starred_first: bool = True,
+        order_dir: SQLiteDirection = SQLiteDirection.Descending,
         image_origin: Optional[ResourceOrigin] = None,
         categories: Optional[list[ImageCategory]] = None,
         is_intermediate: Optional[bool] = None,
         board_id: Optional[str] = None,
+        search_term: Optional[str] = None,
     ) -> OffsetPaginatedResults[ImageDTO]:
         try:
             results = self.__invoker.services.image_records.get_many(
                 offset,
                 limit,
+                starred_first,
+                order_dir,
                 image_origin,
                 categories,
                 is_intermediate,
                 board_id,
+                search_term,
             )
 
             image_dtos = [

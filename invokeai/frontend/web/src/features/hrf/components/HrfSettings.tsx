@@ -1,5 +1,6 @@
 import { FormControlGroup } from '@invoke-ai/ui-library';
 import { useAppSelector } from 'app/store/storeHooks';
+import { selectHrfEnabled } from 'features/hrf/store/hrfSlice';
 import { useFeatureStatus } from 'features/system/hooks/useFeatureStatus';
 import { memo } from 'react';
 
@@ -8,8 +9,8 @@ import ParamHrfStrength from './ParamHrfStrength';
 import ParamHrfToggle from './ParamHrfToggle';
 
 export const HrfSettings = memo(() => {
-  const isHRFFeatureEnabled = useFeatureStatus('hrf').isFeatureEnabled;
-  const hrfEnabled = useAppSelector((s) => s.hrf.hrfEnabled);
+  const isHRFFeatureEnabled = useFeatureStatus('hrf');
+  const hrfEnabled = useAppSelector(selectHrfEnabled);
 
   if (!isHRFFeatureEnabled) {
     return null;

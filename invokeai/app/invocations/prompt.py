@@ -5,9 +5,10 @@ import numpy as np
 from dynamicprompts.generators import CombinatorialPromptGenerator, RandomPromptGenerator
 from pydantic import field_validator
 
+from invokeai.app.invocations.baseinvocation import BaseInvocation, invocation
+from invokeai.app.invocations.fields import InputField, UIComponent
 from invokeai.app.invocations.primitives import StringCollectionOutput
-
-from .baseinvocation import BaseInvocation, InputField, InvocationContext, UIComponent, invocation
+from invokeai.app.services.shared.invocation_context import InvocationContext
 
 
 @invocation(
@@ -15,7 +16,7 @@ from .baseinvocation import BaseInvocation, InputField, InvocationContext, UICom
     title="Dynamic Prompt",
     tags=["prompt", "collection"],
     category="prompt",
-    version="1.0.0",
+    version="1.0.1",
     use_cache=False,
 )
 class DynamicPromptInvocation(BaseInvocation):
@@ -44,7 +45,7 @@ class DynamicPromptInvocation(BaseInvocation):
     title="Prompts from File",
     tags=["prompt", "file"],
     category="prompt",
-    version="1.0.1",
+    version="1.0.2",
 )
 class PromptsFromFileInvocation(BaseInvocation):
     """Loads prompts from a text file"""

@@ -2,12 +2,9 @@
     "accessibility": {
         "mode": "Mód",
         "uploadImage": "Fénykép feltöltése",
-        "zoomIn": "Nagyítás",
         "nextImage": "Következő kép",
         "previousImage": "Előző kép",
-        "menu": "Menü",
-        "zoomOut": "Kicsinyítés",
-        "loadMore": "Több betöltése"
+        "menu": "Menü"
     },
     "boards": {
         "cancel": "Mégsem",
@@ -23,10 +20,8 @@
         "ai": "ai",
         "back": "Vissza",
         "cancel": "Mégsem",
-        "close": "Bezár",
         "or": "vagy",
         "details": "Részletek",
-        "darkMode": "Sötét Mód",
         "error": "Hiba",
         "file": "Fájl",
         "githubLabel": "Github",
@@ -34,7 +29,6 @@
         "delete": "Törlés",
         "data": "Adat",
         "discordLabel": "Discord",
-        "folder": "Mappa",
-        "langEnglish": "Angol"
+        "folder": "Mappa"
     }
 }

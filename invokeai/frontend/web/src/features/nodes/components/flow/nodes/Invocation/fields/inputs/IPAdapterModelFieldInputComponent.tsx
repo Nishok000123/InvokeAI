@@ -2,10 +2,11 @@ import { Combobox, FormControl, Tooltip } from '@invoke-ai/ui-library';
 import { useAppDispatch } from 'app/store/storeHooks';
 import { useGroupedModelCombobox } from 'common/hooks/useGroupedModelCombobox';
 import { fieldIPAdapterModelValueChanged } from 'features/nodes/store/nodesSlice';
+import { NO_DRAG_CLASS, NO_WHEEL_CLASS } from 'features/nodes/types/constants';
 import type { IPAdapterModelFieldInputInstance, IPAdapterModelFieldInputTemplate } from 'features/nodes/types/field';
 import { memo, useCallback } from 'react';
-import type { IPAdapterModelConfigEntity } from 'services/api/endpoints/models';
-import { useGetIPAdapterModelsQuery } from 'services/api/endpoints/models';
+import { useIPAdapterModels } from 'services/api/hooks/modelsByType';
+import type { IPAdapterModelConfig } from 'services/api/types';
 
 import type { FieldComponentProps } from './types';
 
@@ -14,10 +15,10 @@ const IPAdapterModelFieldInputComponent = (
 ) => {
   const { nodeId, field } = props;
   const dispatch = useAppDispatch();
-  const { data: ipAdapterModels } = useGetIPAdapterModelsQuery();
+  const [modelConfigs, { isLoading }] = useIPAdapterModels();
 
   const _onChange = useCallback(
-    (value: IPAdapterModelConfigEntity | null) => {
+    (value: IPAdapterModelConfig | null) => {
       if (!value) {
         return;
       }
@@ -33,14 +34,15 @@ const IPAdapterModelFieldInputComponent = (
   );
 
   const { options, value, onChange } = useGroupedModelCombobox({
-    modelEntities: ipAdapterModels,
+    modelConfigs,
     onChange: _onChange,
-    selectedModel: field.value ? { ...field.value, model_type: 'ip_adapter' } : undefined,
+    selectedModel: field.value,
+    isLoading,
   });
 
   return (
     <Tooltip label={value?.description}>
-      <FormControl className="nowheel nodrag" isInvalid={!value}>
+      <FormControl className={`${NO_WHEEL_CLASS} ${NO_DRAG_CLASS}`} isInvalid={!value}>
         <Combobox value={value} placeholder="Pick one" options={options} onChange={onChange} />
       </FormControl>
     </Tooltip>

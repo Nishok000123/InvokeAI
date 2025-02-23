@@ -2,11 +2,10 @@ import sqlite3
 import threading
 from typing import Optional, cast
 
+from invokeai.app.services.board_image_records.board_image_records_base import BoardImageRecordStorageBase
 from invokeai.app.services.image_records.image_records_common import ImageRecord, deserialize_image_record
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
-
-from .board_image_records_base import BoardImageRecordStorageBase
 
 
 class SqliteBoardImageRecordStorage(BoardImageRecordStorageBase):
@@ -147,7 +146,11 @@ class SqliteBoardImageRecordStorage(BoardImageRecordStorageBase):
             self._lock.acquire()
             self._cursor.execute(
                 """--sql
-                SELECT COUNT(*) FROM board_images WHERE board_id = ?;
+                SELECT COUNT(*)
+                FROM board_images
+                INNER JOIN images ON board_images.image_name = images.image_name
+                WHERE images.is_intermediate = FALSE
+                AND board_images.board_id = ?;
                 """,
                 (board_id,),
             )

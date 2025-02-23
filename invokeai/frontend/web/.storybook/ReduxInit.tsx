@@ -1,5 +1,5 @@
 import { PropsWithChildren, memo, useEffect } from 'react';
-import { modelChanged } from '../src/features/parameters/store/generationSlice';
+import { modelChanged } from '../src/features/controlLayers/store/paramsSlice';
 import { useAppDispatch } from '../src/app/store/storeHooks';
 import { useGlobalModifiersInit } from '@invoke-ai/ui-library';
 /**
@@ -11,11 +11,7 @@ export const ReduxInit = memo((props: PropsWithChildren) => {
   useGlobalModifiersInit();
   useEffect(() => {
     dispatch(
-      modelChanged({
-        model_name: 'test_model',
-        base_model: 'sd-1',
-        model_type: 'main',
-      })
+      modelChanged({ model: { key: 'test_model', hash: 'some_hash', name: 'some name', base: 'sd-1', type: 'main' } })
     );
   }, []);
 
